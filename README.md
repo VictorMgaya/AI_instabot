@@ -1,74 +1,81 @@
-<p align="center">
-  <img src="docs/instabot.gif" alt="Instabot Demo" width="600"/>
-</p>
+<div align="center">
+  <img src="docs/instabot.gif" alt="demo" width="700">
+</div>
 
-<h1 align="center">🚀 Instabot</h1>
+<br>
 
-<p align="center">
-  <b>Instagram automation — follow, like, comment, and unfollow on autopilot.</b>
-</p>
+<h1 align="center">🤖 AI_Instabot</h1>
 
 <p align="center">
-  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go" alt="Go"></a>
-  <img src="https://img.shields.io/badge/status-active-success" alt="Status">
-  <img src="https://img.shields.io/github/license/VictorMgaya/AI_instabot" alt="License">
+  <i>Your Instagram growth, fully automated.</i>
+  <br><br>
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.26+-%2300ADD8?logo=go&logoColor=white" alt="Go"></a>
+  <img src="https://img.shields.io/badge/status-active-%2322c55e" alt="Status">
+  <img src="https://img.shields.io/badge/license-GPLv3-%238b5cf6" alt="License">
+  <img src="https://img.shields.io/github/last-commit/VictorMgaya/AI_instabot" alt="Last commit">
+  <img src="https://img.shields.io/badge/safety-%E2%9C%85%20human--like-brightgreen" alt="Safety">
 </p>
 
 ---
 
-## ✨ Features
+## 📖 The Story
 
-- 🤖 **Auto-follow** users from target hashtags  
-- ❤️ **Auto-like** posts based on follower thresholds  
-- 💬 **Auto-comment** with random picks from your list  
-- 👋 **Auto-unfollow** users who don't follow back  
-- 🧠 **Smart limits** — avoid bans with configurable delays  
-- 📧 **Email reports** after each session  
-- 🔐 **Session encryption** — login once, reuse safely  
+You spend hours scrolling, liking, following — hoping people notice you back.  
+**This bot does it for you. Better. Faster. 24/7.**
 
-## ⚙️ How it works
+AI_Instabot roams Instagram's hashtag feeds, finding real people in your niche. It likes their posts, drops a comment, follows them — all with human-like timing so your account stays safe. By morning, half of them visit your profile. Some follow back. Some like your stuff.
 
-```
-config.json  ──►  explore hashtags  ──►  like / follow / comment
-                                      ──►  unfollow non-reciprocals
-                                      ──►  email summary
-```
+**Growth on autopilot. No smoke. No mirrors. Just code.**
 
-You define **hashtags**, **actions per tag**, and **follower limits**. The bot browses Instagram through the unofficial API and performs actions that look natural.
+---
 
-## 🚦 Quick start
+## 🎯 What It Does
+
+| Action | How |
+|--------|-----|
+| ❤️ **Like** | Likes posts from target hashtag feeds |
+| 👣 **Follow** | Follows users who posted those images |
+| 💬 **Comment** | Drops a random comment from your list |
+| 👋 **Unfollow** | Unfollows users who don't follow back (sync mode) |
+
+Every action is governed by **follower-count thresholds** you set — so you never waste engagement on bots or risk getting flagged by big accounts.
+
+---
+
+## ⚡ Quick Start
 
 ```bash
-# 1. Install Go 1.26+
-# 2. Clone & build
+# Prerequisites: Go 1.26+
 git clone https://github.com/VictorMgaya/AI_instabot
 cd AI_instabot
 go build -o instabot .
 
-# 3. Copy & edit config
+# Copy the sample config
 cp dist/config.json config/config.json
-# edit config/config.json with your credentials and targets
+# Edit with your Instagram credentials & targets
+vim config/config.json
 
-# 4. Run
+# Run
 ./instabot -run
 ```
 
-<details>
-<summary><b>📋 Options</b></summary>
+---
 
-| Flag | Description |
-|------|-------------|
-| `-run` | Run the bot |
-| `-dev` | Dry-run mode (no real actions) |
-| `-sync` | Unfollow non-reciprocal followers |
-| `-logs` | Write logs to file |
-| `-nomail` | Disable email reports |
-| `-noduplicate` | Skip already-processed users |
-| `-h` | Show help |
+## 🎮 Flags
 
-</details>
+```
+  -run          Run the bot (like, follow, comment)
+  -sync         Unfollow non-reciprocal followers
+  -dev          Dry-run — no real actions (safe to test)
+  -logs         Write everything to a log file
+  -nomail       Skip the end-of-run email report
+  -noduplicate  Skip users already processed this session
+  -h            Help
+```
 
-## 📁 Config example
+---
+
+## 📁 Config
 
 ```json
 {
@@ -84,35 +91,101 @@ cp dist/config.json config/config.json
     "follow":  { "min": 200, "max": 10000 }
   },
   "tags": {
-    "golang":  { "like": 3, "comment": 1, "follow": 1 },
+    "golang": { "like": 3, "comment": 1, "follow": 1 },
     "photography": { "like": 5, "comment": 2, "follow": 1 }
   },
-  "comments": ["awesome!", "nice shot!", "🔥"],
+  "comments": ["awesome!", "nice one 🔥", "love this ❤️"],
   "blacklist": ["spam_account"],
   "whitelist": ["friend_account"]
 }
 ```
 
-## 🛡️ Safety first
+<details>
+<summary>📬 <b>Optional: Email reports</b></summary>
 
-- ⏱️ **Random delays** between actions — looks human  
-- 🔐 **Encrypted session** — store login once, avoid re-auth  
-- 📉 **Follower limits** — avoid targeting big/influential accounts that report  
+```json
+"mail": {
+  "from": "you@gmail.com",
+  "password": "your_app_password",
+  "to": "you@gmail.com",
+  "smtp": "smtp.gmail.com:587",
+  "server": "smtp.gmail.com"
+}
+```
+</details>
 
-## 📬 Email reports
+---
 
-Optionally receive a summary after each run:
+## 🧠 How It Works
 
 ```
-📊 Session Report
-   👍 Liked:      24
-   👣 Followed:   12
-   💬 Commented:   8
-   👋 Unfollowed:  5
+              ┌─────────────────┐
+              │   config.json   │
+              └────────┬────────┘
+                       │
+              ┌────────▼────────┐
+              │   Random tech   │
+              │   hashtag       │
+              └────────┬────────┘
+                       │
+              ┌────────▼────────┐
+              │  Fetch images   │
+              │  via goinsta    │
+              └────────┬────────┘
+                       │
+              ┌────────▼────────┐
+              │  For each user: │
+              │  ┌──────────┐   │
+              │  │ Check    │   │
+              │  │ follower │   │
+              │  │ count    │   │
+              │  └────┬─────┘   │
+              │       │         │
+              │  ┌────▼─────┐   │
+              │  │ Like ✅  │   │
+              │  │ Follow ✅│   │
+              │  │Comment ✅│   │
+              │  └──────────┘   │
+              │       │         │
+              │   ⏱️ 20s pause │
+              └────────┬────────┘
+                       │
+              ┌────────▼────────┐
+              │  Goals met?     │
+              │  ──► yes: done  │
+              │  ──► no: retry  │
+              └─────────────────┘
 ```
 
-Configure SMTP in `config.json` (Gmail works out of the box).
+---
+
+## 🔒 Safety First
+
+| Feature | Why |
+|---------|-----|
+| ⏱️ **20s delay** between actions | Looks human, avoids rate limits |
+| 🔐 **Session encryption** | Login once, reuse. No repeated 2FA |
+| 📉 **Follower thresholds** | Avoid bot accounts & report-happy influencers |
+| 🔄 **Retry with backoff** | Instagram slow? Waits and retries gracefully |
+
+---
+
+## 🏗️ Tech Stack
+
+- **Go 1.26+** — compiled, fast, single binary
+- **goinsta/v3** — unofficial Instagram API (vendored locally)
+- **Viper** — config management
+- **net/smtp** — email reports
+
+---
 
 ## 📄 License
 
-GPL v3 — see [LICENSE](LICENSE).
+**GPL v3** — Free as in freedom. Use it, modify it, share it.  
+See [LICENSE](LICENSE) for details.
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ and Go · Not affiliated with Instagram™</sub>
+</div>
