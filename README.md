@@ -188,4 +188,10 @@ See [LICENSE](LICENSE) for details.
 
 <div align="center">
   <sub>Built with ❤️ and Go · Not affiliated with Instagram™</sub>
+  <br><br>
+  <a href="https://www.paypal.com/ncp/payment/3QNCA24DEUXPC">
+    <img src="docs/qrcode.png" width="160" alt="Buy me a coffee">
+    <br>
+    ☕ Buy me a coffee
+  </a>
 </div>
