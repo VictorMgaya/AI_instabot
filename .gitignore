@@ -26,3 +26,17 @@ goinsta-session
 
 # Vendor folder
 vendor/
+
+# Config (contains credentials)
+config/config.json
+
+# Binaries
+go-instabot
+instabot
+
+# Screenshots
+*.png
+
+# OS files
+.DS_Store
+Thumbs.db

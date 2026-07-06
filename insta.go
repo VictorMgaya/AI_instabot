@@ -170,22 +170,25 @@ func (myInstabot MyInstabot) followUser(user *goinsta.User) {
 }
 
 func (myInstabot MyInstabot) loopTags() {
-	for tag = range tagsList {
-		limitsConf := viper.GetStringMap("tags." + tag)
-		// Some converting
+	// Get limits from config using the first available tag entry
+	for tagName := range tagsList {
+		limitsConf := viper.GetStringMap("tags." + tagName)
 		limits = map[string]int{
 			"follow":  int(limitsConf["follow"].(float64)),
 			"like":    int(limitsConf["like"].(float64)),
 			"comment": int(limitsConf["comment"].(float64)),
 		}
-		// What we did so far
+		break
+	}
+
+	for {
+		tag = techTags[rand.Intn(len(techTags))]
 		numFollowed = 0
 		numLiked = 0
 		numCommented = 0
-
+		log.Printf("Picked hashtag: #%s\n", tag)
 		myInstabot.browse()
 	}
-	buildReport()
 }
 
 // Likes an image, if not liked already
@@ -209,17 +212,15 @@ func (myInstabot MyInstabot) browse() {
 		log.Println("Fetching the list of images for #" + tag + "\n")
 		i++
 
-		// Getting all the pictures we can on the first page
-		// Instagram will return a 500 sometimes, so we will retry 10 times.
-		// Check retry() for more info.
-		var images *goinsta.FeedTag
+		hashtag := myInstabot.Insta.NewHashtag(tag)
 		err := retry(10, 20*time.Second, func() (err error) {
-			images, err = myInstabot.Insta.Feed.Tags(tag)
-			return
+			return hashtag.Info()
 		})
 		check(err)
 
-		myInstabot.goThrough(images)
+		hashtag.Next()
+
+		myInstabot.goThrough(hashtag)
 
 		if viper.IsSet("limits.maxRetry") && i > viper.GetInt("limits.maxRetry") {
 			log.Println("Currently not enough images for this tag to achieve goals")
@@ -229,7 +230,7 @@ func (myInstabot MyInstabot) browse() {
 }
 
 // Goes through all the images for a certain tag
-func (myInstabot MyInstabot) goThrough(images *goinsta.FeedTag) {
+func (myInstabot MyInstabot) goThrough(images *goinsta.Hashtag) {
 	var i = 0
 	// do for other too
 	for _, image := range images.Items {

@@ -47,6 +47,15 @@ var followUpperLimit int
 var commentLowerLimit int
 var commentUpperLimit int
 
+// Tech-related hashtags that will be picked randomly
+var techTags = []string{
+	"tech", "technology", "programming", "coding", "gadgets",
+	"ai", "artificialintelligence", "machinelearning", "cybersecurity",
+	"blockchain", "software", "developer", "webdev", "startup",
+	"innovation", "robotics", "cloudcomputing", "datascience",
+	"python", "javascript", "golang", "opensource",
+}
+
 // Hashtags list. Do not put the '#' in the config file
 var tagsList map[string]interface{}
 
