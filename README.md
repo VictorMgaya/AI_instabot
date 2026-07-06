@@ -7,55 +7,58 @@
 <h1 align="center">🤖 AI_Instabot</h1>
 
 <p align="center">
-  <i>Your Instagram growth, fully automated.</i>
+  <i>Instagram growth on autopilot — powered by AI.</i>
   <br><br>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.26+-%2300ADD8?logo=go&logoColor=white" alt="Go"></a>
   <img src="https://img.shields.io/badge/status-active-%2322c55e" alt="Status">
   <img src="https://img.shields.io/badge/license-GPLv3-%238b5cf6" alt="License">
   <img src="https://img.shields.io/github/last-commit/VictorMgaya/AI_instabot" alt="Last commit">
-  <img src="https://img.shields.io/badge/safety-%E2%9C%85%20human--like-brightgreen" alt="Safety">
 </p>
 
 ---
 
 ## 📖 The Story
 
-You spend hours scrolling, liking, following — hoping people notice you back.  
-**This bot does it for you. Better. Faster. 24/7.**
+You scroll. You like. You follow. You hope.
 
-AI_Instabot roams Instagram's hashtag feeds, finding real people in your niche. It likes their posts, drops a comment, follows them — all with human-like timing so your account stays safe. By morning, half of them visit your profile. Some follow back. Some like your stuff.
+**AI_Instabot doesn't hope.** It roams Instagram's Explore page — no hashtags, no bias, just real content from real accounts. Every comment is written by AI through OpenRouter, contextual to the post it's responding to.
 
-**Growth on autopilot. No smoke. No mirrors. Just code.**
+One binary. One config. Set it and forget it.
 
 ---
 
 ## 🎯 What It Does
 
 | Action | How |
-|--------|-----|
-| ❤️ **Like** | Likes posts from target hashtag feeds |
-| 👣 **Follow** | Follows users who posted those images |
-| 💬 **Comment** | Drops a random comment from your list |
-| 👋 **Unfollow** | Unfollows users who don't follow back (sync mode) |
+|--------|------|
+| ❤️ **Like** | Likes posts from the Explore feed |
+| 👣 **Follow** | Follows users whose content appears |
+| 💬 **AI Comment** | Every user gets an AI-generated comment based on their post caption |
+| 👋 **Unfollow** | Unfollows non-reciprocal followers (`-sync`) |
 
-Every action is governed by **follower-count thresholds** you set — so you never waste engagement on bots or risk getting flagged by big accounts.
+No hashtag lists. No keyword hunting. Just random, fresh explore content every single run.
+
+---
+
+## 🧠 AI Comments
+
+This is the core. When the bot encounters a user, it sends the post caption + user info to **OpenRouter** (`auto` model) and gets back a short, genuine-sounding comment. No more "nice pic" spam.
+
+**Requires:** `openrouter.api_key` in `config/config.json` (or `OPENROUTER_API_KEY` env var).
 
 ---
 
 ## ⚡ Quick Start
 
 ```bash
-# Prerequisites: Go 1.26+
 git clone https://github.com/VictorMgaya/AI_instabot
 cd AI_instabot
 go build -o instabot .
 
-# Copy the sample config
 cp dist/config.json config/config.json
-# Edit with your Instagram credentials & targets
+# Edit config/config.json with your Instagram login & OpenRouter key
 vim config/config.json
 
-# Run
 ./instabot -run
 ```
 
@@ -64,12 +67,12 @@ vim config/config.json
 ## 🎮 Flags
 
 ```
-  -run          Run the bot (like, follow, comment)
-  -sync         Unfollow non-reciprocal followers
-  -dev          Dry-run — no real actions (safe to test)
-  -logs         Write everything to a log file
-  -nomail       Skip the end-of-run email report
-  -noduplicate  Skip users already processed this session
+  -run          Like, follow, and AI-comment on random explore content
+  -sync         Unfollow users who don't follow back
+  -dev          Dry-run (no real API mutations)
+  -logs         Write logs to a file
+  -nomail       Disable email report
+  -noduplicate  Skip already-processed users this session
   -h            Help
 ```
 
@@ -79,6 +82,9 @@ vim config/config.json
 
 ```json
 {
+  "openrouter": {
+    "api_key": "sk-or-v1-..."
+  },
   "user": {
     "instagram": {
       "username": "your_handle",
@@ -87,16 +93,13 @@ vim config/config.json
   },
   "limits": {
     "like":    { "min": 0, "max": 10000 },
-    "comment": { "min": 100, "max": 10000 },
     "follow":  { "min": 200, "max": 10000 }
   },
   "tags": {
-    "golang": { "like": 3, "comment": 1, "follow": 1 },
-    "photography": { "like": 5, "comment": 2, "follow": 1 }
+    "session": { "like": 10, "follow": 5, "comment": 15 }
   },
-  "comments": ["awesome!", "nice one 🔥", "love this ❤️"],
-  "blacklist": ["spam_account"],
-  "whitelist": ["friend_account"]
+  "blacklist": [],
+  "whitelist": []
 }
 ```
 
@@ -114,66 +117,72 @@ vim config/config.json
 ```
 </details>
 
+The `tags.session` values set per-run caps:
+- `like` — max likes this session
+- `follow` — max follows this session
+- `comment` — max AI comments this session
+
 ---
 
 ## 🧠 How It Works
 
 ```
-              ┌─────────────────┐
-              │   config.json   │
-              └────────┬────────┘
-                       │
-              ┌────────▼────────┐
-              │   Random tech   │
-              │   hashtag       │
-              └────────┬────────┘
-                       │
-              ┌────────▼────────┐
-              │  Fetch images   │
-              │  via goinsta    │
-              └────────┬────────┘
-                       │
-              ┌────────▼────────┐
-              │  For each user: │
-              │  ┌──────────┐   │
-              │  │ Check    │   │
-              │  │ follower │   │
-              │  │ count    │   │
-              │  └────┬─────┘   │
-              │       │         │
-              │  ┌────▼─────┐   │
-              │  │ Like ✅  │   │
-              │  │ Follow ✅│   │
-              │  │Comment ✅│   │
-              │  └──────────┘   │
-              │       │         │
-              │   ⏱️ 20s pause │
-              └────────┬────────┘
-                       │
-              ┌────────▼────────┐
-              │  Goals met?     │
-              │  ──► yes: done  │
-              │  ──► no: retry  │
-              └─────────────────┘
+         ┌──────────────┐
+         │  config.json  │
+         └──────┬───────┘
+                │
+         ┌──────▼───────┐
+         │  Explore     │
+         │  (Refresh)   │  ← fresh page every run
+         └──────┬───────┘
+                │
+         ┌──────▼───────┐
+         │  Extract     │
+         │  media items │
+         └──────┬───────┘
+                │
+         ┌──────▼───────┐
+         │  For each:   │
+         │  ┌─────────┐ │
+         │  │ Fetch   │ │
+         │  │ profile │ │
+         │  └────┬────┘ │
+         │       │      │
+         │  ┌────▼────┐ │
+         │  │ Like ✅ │ │
+         │  │Follow ✅│ │
+         │  │AI Cmnt✅│ │  ← OpenRouter generates it
+         │  └─────────┘ │
+         │       │      │
+         │   ⏱️ 20s    │
+         └──────┬───────┘
+                │
+         ┌──────▼───────┐
+         │  Caps met?   │
+         │  ──► loop    │
+         │  ──► refresh │
+         └──────────────┘
 ```
 
 ---
 
-## 🔒 Safety First
+## 🔒 Safety
 
 | Feature | Why |
 |---------|-----|
-| ⏱️ **20s delay** between actions | Looks human, avoids rate limits |
-| 🔐 **Session encryption** | Login once, reuse. No repeated 2FA |
-| 📉 **Follower thresholds** | Avoid bot accounts & report-happy influencers |
-| 🔄 **Retry with backoff** | Instagram slow? Waits and retries gracefully |
+| ⏱️ **20s delay** | Looks human, avoids rate limits |
+| 🔐 **Encrypted session** | Login once, no repeated 2FA |
+| 📉 **Follower thresholds** | Avoid bot/scam accounts |
+| 🔄 **Retry with backoff** | Handles API hiccups gracefully |
+| ♻️ **Fresh explore page** | Never repeats content |
 
 ---
 
 ## 🏗️ Tech Stack
 
-- **Go 1.26+** — compiled, fast, single binary
-- **goinsta/v3** — unofficial Instagram API (vendored locally)
+- **Go 1.26+** — single static binary
+- **goinsta/v3** — unofficial Instagram API (vendored)
+- **OpenRouter** — AI comment generation (model: `auto`)
 - **Viper** — config management
 - **net/smtp** — email reports
 
@@ -181,8 +190,8 @@ vim config/config.json
 
 ## 📄 License
 
-**GPL v3** — Free as in freedom. Use it, modify it, share it.  
-See [LICENSE](LICENSE) for details.
+**GPL v3** — Use it, modify it, share it.  
+See [LICENSE](LICENSE).
 
 ---
 
