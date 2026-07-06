@@ -135,18 +135,19 @@ func (disc *Discover) Refresh() bool {
 }
 
 func (disc *Discover) setValues() {
-	for _, sec := range disc.SectionalItems {
-		for _, i := range sec.LayoutContent.Medias {
-			i.Media.insta = disc.insta
-			i.Media.User.insta = disc.insta
+	for si := range disc.SectionalItems {
+		sec := &disc.SectionalItems[si]
+		for i := range sec.LayoutContent.Medias {
+			sec.LayoutContent.Medias[i].Media.insta = disc.insta
+			sec.LayoutContent.Medias[i].Media.User.insta = disc.insta
 		}
-		for _, i := range sec.LayoutContent.FillItems {
-			i.Media.insta = disc.insta
-			i.Media.User.insta = disc.insta
+		for i := range sec.LayoutContent.FillItems {
+			sec.LayoutContent.FillItems[i].Media.insta = disc.insta
+			sec.LayoutContent.FillItems[i].Media.User.insta = disc.insta
 		}
-		for _, i := range sec.LayoutContent.ThreeByFourItem.Clips.Items {
-			i.Media.insta = disc.insta
-			i.Media.User.insta = disc.insta
+		for i := range sec.LayoutContent.ThreeByFourItem.Clips.Items {
+			sec.LayoutContent.ThreeByFourItem.Clips.Items[i].Media.insta = disc.insta
+			sec.LayoutContent.ThreeByFourItem.Clips.Items[i].Media.User.insta = disc.insta
 		}
 		sec.LayoutContent.OneByOneItem.Media.insta = disc.insta
 		sec.LayoutContent.OneByOneItem.Media.User.insta = disc.insta
