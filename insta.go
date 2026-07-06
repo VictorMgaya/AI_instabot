@@ -258,17 +258,18 @@ func extractExploreItems(section goinsta.DiscoverSectionalItem) []goinsta.Item {
 }
 
 func (myInstabot MyInstabot) processItem(image goinsta.Item) {
-	if image.User.Username == viper.GetString("user.instagram.username") {
+	username := image.User.Username
+	if username == "" || username == viper.GetString("user.instagram.username") {
 		return
 	}
 
-	if checkedUser[image.User.Username] && noduplicate {
+	if checkedUser[username] && noduplicate {
 		return
 	}
 
 	var userInfo *goinsta.User
 	err := retry(10, 20*time.Second, func() (err error) {
-		userInfo, err = myInstabot.Insta.Profiles.ByName(image.User.Username)
+		userInfo, err = myInstabot.Insta.Profiles.ByName(username)
 		return
 	})
 	check(err)
