@@ -282,8 +282,8 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 	checkedUser[userInfo.Username] = true
 	log.Printf("Checking %s — %d followers\n", userInfo.Username, followerCount)
 
-	like := followerCount > likeLowerLimit && followerCount < likeUpperLimit && numLiked < limits["like"]
-	follow := followerCount > followLowerLimit && followerCount < followUpperLimit && numFollowed < limits["follow"] && like
+	like := numLiked < limits["like"]
+	follow := numFollowed < limits["follow"]
 	comment := numCommented < limits["comment"]
 
 	skip := false
