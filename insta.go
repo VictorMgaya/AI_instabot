@@ -163,14 +163,13 @@ func (myInstabot MyInstabot) followUser(user *goinsta.User) {
 		}
 		log.Println("Followed")
 		numFollowed++
-		report[line{tag, "follow"}]++
+		report[line{"explore", "follow"}]++
 	} else {
 		log.Println("Already following " + user.Username)
 	}
 }
 
-func (myInstabot MyInstabot) loopTags() {
-	// Get limits from config using the first available tag entry
+func (myInstabot MyInstabot) loopRandom() {
 	for tagName := range tagsList {
 		limitsConf := viper.GetStringMap("tags." + tagName)
 		limits = map[string]int{
@@ -182,12 +181,11 @@ func (myInstabot MyInstabot) loopTags() {
 	}
 
 	for {
-		tag = techTags[rand.Intn(len(techTags))]
 		numFollowed = 0
 		numLiked = 0
 		numCommented = 0
-		log.Printf("Picked hashtag: #%s\n", tag)
-		myInstabot.browse()
+		log.Println("Fetching random content from explore...")
+		myInstabot.browseExplore()
 	}
 }
 
@@ -200,120 +198,119 @@ func (myInstabot MyInstabot) likeImage(image goinsta.Item) {
 		}
 		log.Println("Liked")
 		numLiked++
-		report[line{tag, "like"}]++
+		report[line{"explore", "like"}]++
 	} else {
 		log.Println("Image already liked")
 	}
 }
 
-func (myInstabot MyInstabot) browse() {
-	var i = 0
-	for numFollowed < limits["follow"] || numLiked < limits["like"] || numCommented < limits["comment"] {
-		log.Println("Fetching the list of images for #" + tag + "\n")
-		i++
+func (myInstabot MyInstabot) browseExplore() {
+	if err := retry(3, 10*time.Second, func() error {
+		if myInstabot.Insta.Discover.Next() {
+			return nil
+		}
+		if err := myInstabot.Insta.Discover.Error(); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		log.Printf("Explore fetch error: %v", err)
+		return
+	}
 
-		hashtag := myInstabot.Insta.NewHashtag(tag)
-		err := retry(10, 20*time.Second, func() (err error) {
-			return hashtag.Info()
-		})
-		check(err)
-
-		hashtag.Next()
-
-		myInstabot.goThrough(hashtag)
-
-		if viper.IsSet("limits.maxRetry") && i > viper.GetInt("limits.maxRetry") {
-			log.Println("Currently not enough images for this tag to achieve goals")
+	for _, section := range myInstabot.Insta.Discover.Items {
+		if numFollowed >= limits["follow"] &&
+			numLiked >= limits["like"] &&
+			numCommented >= limits["comment"] {
 			break
 		}
+		myInstabot.processSection(section)
 	}
 }
 
-// Goes through all the images for a certain tag
-func (myInstabot MyInstabot) goThrough(images *goinsta.Hashtag) {
-	var i = 0
-	// do for other too
-	for _, image := range images.Items {
-		// Exiting the loop if there is nothing left to do
-		if numFollowed >= limits["follow"] && numLiked >= limits["like"] && numCommented >= limits["comment"] {
+func (myInstabot MyInstabot) processSection(section goinsta.DiscoverSectionalItem) {
+	items := extractExploreItems(section)
+	for _, item := range items {
+		if numFollowed >= limits["follow"] &&
+			numLiked >= limits["like"] &&
+			numCommented >= limits["comment"] {
 			break
 		}
-
-		// Skip our own images
-		if image.User.Username == viper.GetString("user.instagram.username") {
-			continue
-		}
-
-		// Check if we should fetch new images for tag
-		if i >= limits["follow"] && i >= limits["like"] && i >= limits["comment"] {
-			break
-		}
-
-		// Skip checked user if the flag is turned on
-		if checkedUser[image.User.Username] && noduplicate {
-			continue
-		}
-
-		// Getting the user info
-		// Instagram will return a 500 sometimes, so we will retry 10 times.
-		// Check retry() for more info.
-
-		var userInfo *goinsta.User
-		err := retry(10, 20*time.Second, func() (err error) {
-			userInfo, err = myInstabot.Insta.Profiles.ByName(image.User.Username)
-			return
-		})
-		check(err)
-
-		followerCount := userInfo.FollowerCount
-
-		buildLine()
-
-		checkedUser[userInfo.Username] = true
-		log.Println("Checking followers for " + userInfo.Username + " - for #" + tag)
-		log.Printf("%s has %d followers\n", userInfo.Username, followerCount)
-		i++
-
-		// Will only follow and comment if we like the picture
-		like := followerCount > likeLowerLimit && followerCount < likeUpperLimit && numLiked < limits["like"]
-		follow := followerCount > followLowerLimit && followerCount < followUpperLimit && numFollowed < limits["follow"] && like
-		comment := followerCount > commentLowerLimit && followerCount < commentUpperLimit && numCommented < limits["comment"] && like
-
-		// Checking if we are already following current user and skipping if we do
-		skip := false
-		following := myInstabot.Insta.Account.Following("", goinsta.DefaultOrder)
-
-		var followingUsers []goinsta.User
-		for following.Next() {
-			for _, user := range following.Users {
-				followingUsers = append(followingUsers, *user)
-			}
-		}
-
-		for _, user := range followingUsers {
-			if user.Username == userInfo.Username {
-				skip = true
-				break
-			}
-		}
-
-		// Like, then comment/follow
-		if !skip {
-			if like {
-				myInstabot.likeImage(*image)
-				if follow && !containsString(userBlacklist, userInfo.Username) {
-					myInstabot.followUser(userInfo)
-				}
-				if comment {
-					myInstabot.commentImage(*image, userInfo)
-				}
-			}
-		}
-		log.Printf("%s done\n\n", userInfo.Username)
-
-		// This is to avoid the temporary ban by Instagram
-		time.Sleep(20 * time.Second)
+		myInstabot.processItem(item)
 	}
+}
+
+func extractExploreItems(section goinsta.DiscoverSectionalItem) []goinsta.Item {
+	var items []goinsta.Item
+	for _, m := range section.LayoutContent.Medias {
+		items = append(items, m.Media)
+	}
+	for _, m := range section.LayoutContent.FillItems {
+		items = append(items, m.Media)
+	}
+	if section.LayoutContent.OneByOneItem.Media.Pk != 0 {
+		items = append(items, section.LayoutContent.OneByOneItem.Media)
+	}
+	if section.LayoutContent.TwoByTwoItem.Media.Pk != 0 {
+		items = append(items, section.LayoutContent.TwoByTwoItem.Media)
+	}
+	return items
+}
+
+func (myInstabot MyInstabot) processItem(image goinsta.Item) {
+	if image.User.Username == viper.GetString("user.instagram.username") {
+		return
+	}
+
+	if checkedUser[image.User.Username] && noduplicate {
+		return
+	}
+
+	var userInfo *goinsta.User
+	err := retry(10, 20*time.Second, func() (err error) {
+		userInfo, err = myInstabot.Insta.Profiles.ByName(image.User.Username)
+		return
+	})
+	check(err)
+
+	followerCount := userInfo.FollowerCount
+
+	checkedUser[userInfo.Username] = true
+	log.Printf("Checking %s — %d followers\n", userInfo.Username, followerCount)
+
+	like := followerCount > likeLowerLimit && followerCount < likeUpperLimit && numLiked < limits["like"]
+	follow := followerCount > followLowerLimit && followerCount < followUpperLimit && numFollowed < limits["follow"] && like
+	comment := followerCount > commentLowerLimit && followerCount < commentUpperLimit && numCommented < limits["comment"] && like
+
+	skip := false
+	following := myInstabot.Insta.Account.Following("", goinsta.DefaultOrder)
+	var followingUsers []goinsta.User
+	for following.Next() {
+		for _, user := range following.Users {
+			followingUsers = append(followingUsers, *user)
+		}
+	}
+	for _, user := range followingUsers {
+		if user.Username == userInfo.Username {
+			skip = true
+			break
+		}
+	}
+
+	if !skip {
+		if like {
+			myInstabot.likeImage(image)
+			if follow && !containsString(userBlacklist, userInfo.Username) {
+				myInstabot.followUser(userInfo)
+			}
+			if comment {
+				myInstabot.commentImage(image, userInfo)
+			}
+		}
+	}
+
+	log.Printf("%s done\n\n", userInfo.Username)
+	time.Sleep(20 * time.Second)
 }
 
 // Comments an image
@@ -348,7 +345,7 @@ func (myInstabot MyInstabot) commentImage(image goinsta.Item, userInfo *goinsta.
 	}
 	log.Println("Commented " + text)
 	numCommented++
-	report[line{tag, "comment"}]++
+	report[line{"explore", "comment"}]++
 }
 
 func (myInstabot MyInstabot) updateConfig() {

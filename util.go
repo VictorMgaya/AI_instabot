@@ -47,15 +47,6 @@ var followUpperLimit int
 var commentLowerLimit int
 var commentUpperLimit int
 
-// Tech-related hashtags that will be picked randomly
-var techTags = []string{
-	"tech", "technology", "programming", "coding", "gadgets",
-	"ai", "artificialintelligence", "machinelearning", "cybersecurity",
-	"blockchain", "software", "developer", "webdev", "startup",
-	"innovation", "robotics", "cloudcomputing", "datascience",
-	"python", "javascript", "golang", "opensource",
-}
-
 // Hashtags list. Do not put the '#' in the config file
 var tagsList map[string]interface{}
 
@@ -80,9 +71,6 @@ var userWhitelist []string
 var numFollowed int
 var numLiked int
 var numCommented int
-
-// Will hold the tag value
-var tag string
 
 // check will log.Fatal if err is an error
 func check(err error) {
@@ -211,20 +199,6 @@ func retry(maxAttempts int, sleep time.Duration, function func() error) (err err
 	return fmt.Errorf("After %d attempts, last error: %s", maxAttempts, err)
 }
 
-// Builds the line for the report and prints it
-func buildLine() {
-	reportTag := ""
-	for index, element := range report {
-		if index.Tag == tag {
-			reportTag += fmt.Sprintf("%s %d/%d - ", index.Action, element, limits[index.Action])
-		}
-	}
-	// Prints the report line on the screen / in the log file
-	if reportTag != "" {
-		log.Println(strings.TrimSuffix(reportTag, " - "))
-	}
-}
-
 // Builds the report prints it and sends it
 func buildReport() {
 	reportAsString := ""
@@ -235,16 +209,9 @@ func buildReport() {
 		} else {
 			times = "times"
 		}
-		if index.Action == "like" {
-			reportAsString += fmt.Sprintf("#%s has been liked %d %s\n", index.Tag, element, times)
-		} else {
-			reportAsString += fmt.Sprintf("#%s has been %sed %d %s\n", index.Tag, index.Action, element, times)
-		}
+		reportAsString += fmt.Sprintf("%s %d %s\n", index.Action, element, times)
 	}
 
-	// Displays the report on the screen / log file
 	fmt.Println(reportAsString)
-
-	// Sends the report to the email in the config file, if the option is enabled
 	send(reportAsString, true)
 }
