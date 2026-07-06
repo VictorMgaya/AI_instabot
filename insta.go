@@ -305,7 +305,7 @@ func (myInstabot MyInstabot) goThrough(images *goinsta.Hashtag) {
 					myInstabot.followUser(userInfo)
 				}
 				if comment {
-					myInstabot.commentImage(*image)
+					myInstabot.commentImage(*image, userInfo)
 				}
 			}
 		}
@@ -317,9 +317,16 @@ func (myInstabot MyInstabot) goThrough(images *goinsta.Hashtag) {
 }
 
 // Comments an image
-func (myInstabot MyInstabot) commentImage(image goinsta.Item) {
-	rand.Seed(time.Now().Unix())
-	text := commentsList[rand.Intn(len(commentsList))]
+func (myInstabot MyInstabot) commentImage(image goinsta.Item, userInfo *goinsta.User) {
+	text := myInstabot.generateAISuggestion(image, userInfo)
+	if text == "" && len(commentsList) > 0 {
+		rand.Seed(time.Now().UnixNano())
+		text = commentsList[rand.Intn(len(commentsList))]
+	}
+	if text == "" {
+		log.Println("No comment to post")
+		return
+	}
 	if !dev {
 		comments := image.Comments
 		if comments == nil {
