@@ -1,4 +1,7 @@
 {
+    "openrouter": {
+        "api_key": ""
+    },
     "user": {
         "instagram": {
             "username": "foobar",

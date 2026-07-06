@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Davincible/goinsta/v3"
+	"github.com/spf13/viper"
 )
 
 type openRouterRequest struct {
@@ -34,7 +35,10 @@ type openRouterResponse struct {
 }
 
 func (myInstabot MyInstabot) generateAISuggestion(image goinsta.Item, userInfo *goinsta.User) string {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	apiKey := viper.GetString("openrouter.api_key")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENROUTER_API_KEY")
+	}
 	if apiKey == "" {
 		log.Println("No OpenRouter API key configured, falling back to random comment")
 		return ""
