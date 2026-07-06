@@ -205,8 +205,11 @@ func (myInstabot MyInstabot) likeImage(image goinsta.Item) {
 }
 
 func (myInstabot MyInstabot) browseExplore() {
+	myInstabot.Insta.Discover.Items = nil
+	myInstabot.Insta.Discover.SectionalItems = nil
+
 	if err := retry(3, 10*time.Second, func() error {
-		if myInstabot.Insta.Discover.Next() {
+		if myInstabot.Insta.Discover.Refresh() {
 			return nil
 		}
 		if err := myInstabot.Insta.Discover.Error(); err != nil {
@@ -281,7 +284,7 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 
 	like := followerCount > likeLowerLimit && followerCount < likeUpperLimit && numLiked < limits["like"]
 	follow := followerCount > followLowerLimit && followerCount < followUpperLimit && numFollowed < limits["follow"] && like
-	comment := followerCount > commentLowerLimit && followerCount < commentUpperLimit && numCommented < limits["comment"] && like
+	comment := numCommented < limits["comment"]
 
 	skip := false
 	following := myInstabot.Insta.Account.Following("", goinsta.DefaultOrder)
@@ -304,9 +307,9 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 			if follow && !containsString(userBlacklist, userInfo.Username) {
 				myInstabot.followUser(userInfo)
 			}
-			if comment {
-				myInstabot.commentImage(image, userInfo)
-			}
+		}
+		if comment {
+			myInstabot.commentImage(image, userInfo)
 		}
 	}
 
