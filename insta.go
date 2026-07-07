@@ -190,17 +190,14 @@ func (myInstabot MyInstabot) loopRandom() {
 	loadOrCreateDailyCounters()
 
 	for {
-		// Sleep during nighttime hours to mimic a real user
-		checkSleepAndSleep()
-
 		numFollowed = 0
 		numLiked = 0
 		numCommented = 0
 		log.Println("Fetching random content from explore...")
 		myInstabot.browseExplore()
 
-		// Long between-cycle wait (20–45 min by default)
-		randDelay(cycleDelayMin, cycleDelayMax)
+		// Natural pause between explore cycles (2–5 min)
+		randDelay(120, 300)
 	}
 }
 
@@ -276,6 +273,23 @@ func extractExploreItems(section goinsta.DiscoverSectionalItem) []goinsta.Item {
 	return items
 }
 
+// hasQualityCaption returns true if the post caption has enough real text
+// to be worth engaging with — filters out blank, emoji-only, or spammy posts.
+func hasQualityCaption(image goinsta.Item) bool {
+	caption := strings.TrimSpace(image.Caption.Text)
+	if len(caption) < 30 {
+		return false // too short — likely just emojis or nothing
+	}
+	// Count actual ASCII letters — must have at least 15 real chars
+	letters := 0
+	for _, r := range caption {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			letters++
+		}
+	}
+	return letters >= 15
+}
+
 func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 	username := image.User.Username
 	if username == "" || username == viper.GetString("user.instagram.username") {
@@ -283,6 +297,12 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 	}
 
 	if checkedUser[username] && noduplicate {
+		return
+	}
+
+	// Skip posts with no meaningful caption — not worth engaging
+	if !hasQualityCaption(image) {
+		log.Printf("Skipping %s — caption too thin\n", username)
 		return
 	}
 
@@ -294,60 +314,56 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 	check(err)
 
 	followerCount := userInfo.FollowerCount
-
 	checkedUser[userInfo.Username] = true
 	log.Printf("Checking %s — %d followers\n", userInfo.Username, followerCount)
 
-	// Apply follower limits and privacy checks to be choosy
+	// Only engage with accounts that have a bio — bots usually don't
+	if strings.TrimSpace(userInfo.Biography) == "" {
+		log.Printf("Skipping %s — empty bio\n", userInfo.Username)
+		return
+	}
+
 	canEngage := !userInfo.IsPrivate || userInfo.Friendship.Following
 
-	like := numLiked < limits["like"] && followerCount >= likeLowerLimit && followerCount <= likeUpperLimit && canEngage
-	follow := numFollowed < limits["follow"] && followerCount >= followLowerLimit && followerCount <= followUpperLimit
+	like    := numLiked     < limits["like"]    && followerCount >= likeLowerLimit    && followerCount <= likeUpperLimit    && canEngage
+	follow  := numFollowed  < limits["follow"]  && followerCount >= followLowerLimit  && followerCount <= followUpperLimit
 	comment := numCommented < limits["comment"] && followerCount >= commentLowerLimit && followerCount <= commentUpperLimit && canEngage
 
-	// Check if already following or requested
 	alreadyFollowing := userInfo.Friendship.Following || userInfo.Friendship.OutgoingRequest
-
 	if alreadyFollowing {
-		log.Printf("Already following or requested %s, skipping further follow attempts\n", userInfo.Username)
+		log.Printf("Already following or requested %s, skipping follow\n", userInfo.Username)
 		follow = false
 	}
 
-	// Enforce daily caps on top of per-session limits
-	if like && dailyLimitReached("like") {
-		like = false
-	}
-	if follow && dailyLimitReached("follow") {
-		follow = false
-	}
-	if comment && dailyLimitReached("comment") {
-		comment = false
-	}
+	// Enforce daily hard caps
+	if like    && dailyLimitReached("like")    { like    = false }
+	if follow  && dailyLimitReached("follow")  { follow  = false }
+	if comment && dailyLimitReached("comment") { comment = false }
 
 	if like {
 		myInstabot.likeImage(image)
-		randDelay(30, 75) // was 6–15 s
+		randDelay(8, 18)
 	} else if numLiked < limits["like"] {
-		log.Printf("Skipping like for %s (followers: %d, range: [%d, %d], private: %t)\n", userInfo.Username, followerCount, likeLowerLimit, likeUpperLimit, userInfo.IsPrivate)
+		log.Printf("Skipping like for %s (followers: %d, range: [%d, %d])\n", userInfo.Username, followerCount, likeLowerLimit, likeUpperLimit)
 	}
 
 	if follow && !containsString(userBlacklist, userInfo.Username) {
-		randDelay(45, 90)  // was 10–25 s
+		randDelay(12, 25)
 		myInstabot.followUser(userInfo)
-		randDelay(60, 120) // was 12–30 s
+		randDelay(15, 30)
 	} else if numFollowed < limits["follow"] && !alreadyFollowing {
 		log.Printf("Skipping follow for %s (followers: %d, range: [%d, %d])\n", userInfo.Username, followerCount, followLowerLimit, followUpperLimit)
 	}
 
 	if comment {
 		myInstabot.commentImage(image, userInfo)
-		randDelay(45, 120) // was 10–25 s
+		randDelay(15, 30)
 	} else if numCommented < limits["comment"] {
-		log.Printf("Skipping comment for %s (followers: %d, range: [%d, %d], private: %t)\n", userInfo.Username, followerCount, commentLowerLimit, commentUpperLimit, userInfo.IsPrivate)
+		log.Printf("Skipping comment for %s (followers: %d, range: [%d, %d])\n", userInfo.Username, followerCount, commentLowerLimit, commentUpperLimit)
 	}
 
 	log.Printf("%s done\n\n", userInfo.Username)
-	randDelay(60, 180) // was 25–55 s — long pause between users
+	randDelay(20, 45)
 }
 
 // Comments an image
