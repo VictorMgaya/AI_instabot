@@ -144,7 +144,7 @@ def main():
                 # Click the first item in the dropdown list (always 'Upload videos' or 'Pakia video')
                 page.locator('paper-item, ytcp-text-menu-item, tp-yt-paper-item').first.click(force=True)
                 
-            page.wait_for_selector('input[type="file"]', timeout=30000)
+            page.wait_for_selector('input[type="file"]', state="attached", timeout=30000)
             print("YouTube Uploader: Selecting video file...")
             page.set_input_files('input[type="file"]', args.video)
             
