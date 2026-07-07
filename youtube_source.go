@@ -17,50 +17,14 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// ytSearchQueries are the search terms used to find tech Shorts on YouTube.
+// ytHashtags are the tags explored to find tech Shorts on YouTube.
 // They cover the same wide domains as the Instagram keyword scoring system.
-var ytSearchQueries = []string{
-	// Software & AI
-	"python programming shorts",
-	"machine learning shorts",
-	"llm ai shorts",
-	"software engineering shorts",
-	"coding tutorial shorts",
-	"linux terminal shorts",
-	"docker kubernetes shorts",
-	// Robotics & Hardware
-	"robotics engineering shorts",
-	"embedded systems shorts",
-	"arduino project shorts",
-	"raspberry pi shorts",
-	// Space & Aerospace
-	"spacex launch shorts",
-	"nasa space shorts",
-	"rocket science shorts",
-	"satellite technology shorts",
-	// Automotive & EVs
-	"electric vehicle technology shorts",
-	"autonomous driving shorts",
-	"ev battery shorts",
-	// Energy
-	"solar energy technology shorts",
-	"fusion reactor shorts",
-	"renewable energy shorts",
-	// Quantum & Physics
-	"quantum computing shorts",
-	"particle physics shorts",
-	// Biotech & MedTech
-	"crispr gene editing shorts",
-	"biotech innovation shorts",
-	"medical technology shorts",
-	// Semiconductors & Electronics
-	"semiconductor chip shorts",
-	"pcb design shorts",
-	"electronics engineering shorts",
-	// Consumer Tech
-	"tech review shorts",
-	"3d printing shorts",
-	"fpv drone shorts",
+var ytHashtags = []string{
+	"tech", "technology", "programming", "coding", "software",
+	"space", "spacex", "nasa", "robotics", "engineering",
+	"developer", "science", "electronics", "3dprinting",
+	"futuretech", "computerscience", "hacker", "cybersecurity",
+	"gadgets", "automation", "techworld", "quantumphysics",
 }
 
 // ytVideoMeta holds scraped metadata for a YouTube Short.
@@ -82,17 +46,17 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 	seen := make(map[string]bool)
 
 	for {
-		query := ytSearchQueries[rand.Intn(len(ytSearchQueries))]
-		log.Printf("YTSource: Searching for %q ...", query)
+		tag := ytHashtags[rand.Intn(len(ytHashtags))]
+		log.Printf("YTSource: Exploring hashtag feed #%s ...", tag)
 
-		urls, err := ytBrowseShorts(query)
+		urls, err := ytBrowseShorts(tag)
 		if err != nil {
 			log.Printf("YTSource: Browse error: %v — retrying in 30s", err)
 			time.Sleep(30 * time.Second)
 			continue
 		}
 
-		log.Printf("YTSource: Found %d Short(s) for %q", len(urls), query)
+		log.Printf("YTSource: Found %d Short(s) for #%s", len(urls), tag)
 
 		for _, url := range urls {
 			if seen[url] {
@@ -201,8 +165,8 @@ func removeVideoFile(path string) {
 	}
 }
 
-// ytBrowseShorts uses chromedp to search YouTube and scrape Shorts URLs.
-func ytBrowseShorts(query string) ([]string, error) {
+// ytBrowseShorts uses chromedp to navigate a hashtag explore page, scrolls to load more, and scrapes Shorts URLs.
+func ytBrowseShorts(tag string) ([]string, error) {
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.Flag("disable-gpu", true),
@@ -216,15 +180,22 @@ func ytBrowseShorts(query string) ([]string, error) {
 	ctx, ctxCancel := chromedp.NewContext(allocCtx)
 	defer ctxCancel()
 
-	searchURL := fmt.Sprintf(
-		"https://www.youtube.com/results?search_query=%s&sp=EgIQBg%%253D%%253D",
-		strings.ReplaceAll(query, " ", "+"),
-	)
+	exploreURL := fmt.Sprintf("https://www.youtube.com/hashtag/%s", tag)
 
 	var hrefs []string
 	err := chromedp.Run(ctx,
-		chromedp.Navigate(searchURL),
+		chromedp.Navigate(exploreURL),
 		chromedp.Sleep(4*time.Second),
+		// Scroll down to load more content dynamically
+		chromedp.Evaluate(`
+			(async () => {
+				for (let i = 0; i < 4; i++) {
+					window.scrollTo(0, document.body.scrollHeight);
+					await new Promise(r => setTimeout(r, 1500));
+				}
+			})()
+		`, nil),
+		chromedp.Sleep(2*time.Second),
 		chromedp.Evaluate(`
 			Array.from(document.querySelectorAll('a[href*="/shorts/"]'))
 			  .map(a => a.href)
@@ -232,7 +203,7 @@ func ytBrowseShorts(query string) ([]string, error) {
 		`, &hrefs),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("chromedp search error: %w", err)
+		return nil, fmt.Errorf("chromedp explore error: %w", err)
 	}
 
 	// Deduplicate

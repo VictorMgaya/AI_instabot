@@ -156,16 +156,38 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 
 	// 4. Click 'Create' then 'Upload videos'
 	log.Println("YouTube: Opening upload wizard...")
+	var openWizardSuccess bool
 	err = chromedp.Run(ctx,
 		chromedp.WaitVisible(`[id="create-icon"]`, chromedp.ByQuery),
-		chromedp.Click(`[id="create-icon"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+			(function() {
+				var createBtn = document.querySelector('#create-icon') || document.querySelector('[id="create-icon"]');
+				if (!createBtn) return false;
+				createBtn.click();
+				return true;
+			})()
+		`, &openWizardSuccess),
 		chromedp.Sleep(1*time.Second),
-		// Click upload videos menu item by searching text or class
-		chromedp.Click(`//*[contains(text(), "Upload videos")]`, chromedp.BySearch),
+	)
+	if err != nil || !openWizardSuccess {
+		return fmt.Errorf("failed to click Create button: %w", err)
+	}
+
+	var clickUploadSuccess bool
+	err = chromedp.Run(ctx,
+		chromedp.Evaluate(`
+			(function() {
+				var items = Array.from(document.querySelectorAll('paper-item, ytcp-text-menu-item, tp-yt-paper-item'));
+				var uploadItem = items.find(el => el.innerText.includes('Upload videos'));
+				if (!uploadItem) return false;
+				uploadItem.click();
+				return true;
+			})()
+		`, &clickUploadSuccess),
 		chromedp.Sleep(3*time.Second),
 	)
-	if err != nil {
-		return fmt.Errorf("failed to trigger upload dialog: %w", err)
+	if err != nil || !clickUploadSuccess {
+		return fmt.Errorf("failed to click Upload videos option: %w", err)
 	}
 
 	// 5. Select video file
@@ -209,70 +231,118 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 
 	// 7. Select 'Not made for kids' (mandatory)
 	log.Println("YouTube: Setting audience details...")
+	var kidsSuccess bool
 	err = chromedp.Run(ctx,
-		chromedp.Click(`[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+			(function() {
+				var radio = document.querySelector('[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]') || document.querySelector('paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]') || document.querySelector('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]');
+				if (!radio) return false;
+				radio.click();
+				return true;
+			})()
+		`, &kidsSuccess),
 		chromedp.Sleep(1*time.Second),
 	)
-	if err != nil {
+	if err != nil || !kidsSuccess {
 		return fmt.Errorf("failed to select Not Made for Kids: %w", err)
 	}
 
 	// 8. Wizard Step 1 -> Step 2
 	log.Println("YouTube: Advancing wizard (Details -> Video Elements)...")
+	var next1Success bool
 	err = chromedp.Run(ctx,
-		chromedp.Click(`[id="next-button"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+			(function() {
+				var btn = document.querySelector('[id="next-button"]');
+				if (!btn) return false;
+				btn.click();
+				return true;
+			})()
+		`, &next1Success),
 		chromedp.Sleep(2*time.Second),
 	)
-	if err != nil {
+	if err != nil || !next1Success {
 		return fmt.Errorf("failed to click Next on Details step: %w", err)
 	}
 
 	// 9. Wizard Step 2 -> Step 3
 	log.Println("YouTube: Advancing wizard (Video Elements -> Checks)...")
+	var next2Success bool
 	err = chromedp.Run(ctx,
-		chromedp.Click(`[id="next-button"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+			(function() {
+				var btn = document.querySelector('[id="next-button"]');
+				if (!btn) return false;
+				btn.click();
+				return true;
+			})()
+		`, &next2Success),
 		chromedp.Sleep(2*time.Second),
 	)
-	if err != nil {
+	if err != nil || !next2Success {
 		return fmt.Errorf("failed to click Next on Video Elements step: %w", err)
 	}
 
 	// 10. Wizard Step 3 -> Step 4 (Visibility)
 	log.Println("YouTube: Advancing wizard (Checks -> Visibility)...")
+	var next3Success bool
 	err = chromedp.Run(ctx,
-		chromedp.Click(`[id="next-button"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+			(function() {
+				var btn = document.querySelector('[id="next-button"]');
+				if (!btn) return false;
+				btn.click();
+				return true;
+			})()
+		`, &next3Success),
 		chromedp.Sleep(2*time.Second),
 	)
-	if err != nil {
+	if err != nil || !next3Success {
 		return fmt.Errorf("failed to click Next on Checks step: %w", err)
 	}
 
 	// 11. Set Visibility and Publish
-	visibilityRadio := `[name="PUBLIC"]`
+	var visibilityVal string
 	if dev {
 		log.Println("YouTube: [DEV MODE] Setting visibility to PRIVATE")
-		visibilityRadio = `[name="PRIVATE"]`
+		visibilityVal = "PRIVATE"
 	} else {
 		log.Println("YouTube: Setting visibility to PUBLIC")
+		visibilityVal = "PUBLIC"
 	}
 
+	var visibilitySuccess bool
 	err = chromedp.Run(ctx,
-		chromedp.WaitVisible(visibilityRadio, chromedp.ByQuery),
-		chromedp.Click(visibilityRadio, chromedp.ByQuery),
+		chromedp.Evaluate(fmt.Sprintf(`
+			(function() {
+				var radio = document.querySelector('[name="%s"]') || document.querySelector('paper-radio-button[name="%s"]') || document.querySelector('tp-yt-paper-radio-button[name="%s"]');
+				if (!radio) return false;
+				radio.click();
+				return true;
+			})()
+		`, visibilityVal, visibilityVal, visibilityVal), &visibilitySuccess),
 		chromedp.Sleep(1*time.Second),
 	)
-	if err != nil {
+	if err != nil || !visibilitySuccess {
 		return fmt.Errorf("failed to set visibility: %w", err)
 	}
 
 	// Click Done / Save / Publish
 	log.Println("YouTube: Publishing video...")
+	var doneSuccess bool
 	err = chromedp.Run(ctx,
-		chromedp.Click(`[id="done-button"]`, chromedp.ByQuery),
+		chromedp.Evaluate(`
+			(function() {
+				var btn = document.querySelector('[id="done-button"]');
+				if (!btn) return false;
+				btn.click();
+				return true;
+			})()
+		`, &doneSuccess),
 		// Wait for publish popup or short delay to allow save request to dispatch
 		chromedp.Sleep(7*time.Second),
 	)
-	if err != nil {
+	if err != nil || !doneSuccess {
 		return fmt.Errorf("failed to click publish button: %w", err)
 	}
 
