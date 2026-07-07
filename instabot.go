@@ -34,6 +34,16 @@ func main() {
 		login()
 		log.Println("Starting tech video repost mode (random explore)...")
 		instabot.techExploreLoop()
+	} else if ytSourceMode && run {
+		// YT source + IG engagement — need Instagram login
+		login()
+		log.Println("Starting YouTube source + Instagram engagement simultaneously...")
+		go instabot.ytSourceLoop()
+		instabot.loopRandom()
+	} else if ytSourceMode {
+		// Pure YT-only mode: crawl YouTube Shorts, post to YouTube — no Instagram needed
+		log.Println("Starting YouTube Shorts crawler (YT → YT mode)...")
+		instabot.ytSourceLoop()
 	} else if run {
 		login()
 		if tiktokMode {
@@ -51,5 +61,7 @@ func main() {
 		login()
 		instabot.syncFollowers()
 		instabot.updateConfig()
+	} else {
+		log.Println("No mode selected. Use -run, -tech, -yt-source, -sync, or -tiktok. Add -h for help.")
 	}
 }
