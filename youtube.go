@@ -61,11 +61,31 @@ func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
 	return cookies, nil
 }
 
+var ytEssentialCookies = map[string]bool{
+	"SID":               true,
+	"HSID":              true,
+	"SSID":              true,
+	"APISID":            true,
+	"SAPISID":           true,
+	"LOGIN_INFO":        true,
+	"__Secure-1PSID":    true,
+	"__Secure-3PSID":    true,
+	"__Secure-1PAPISID": true,
+	"__Secure-3PAPISID": true,
+	"__Secure-1PSIDTS":  true,
+	"__Secure-3PSIDTS":  true,
+	"SIDCC":             true,
+}
+
 // setYoutubeCookies injects YouTube cookies into the browser context.
 func setYoutubeCookies(ctx context.Context, cookies []youtubeCookie) error {
 	for _, c := range cookies {
 		// Only set cookies relevant to youtube.com
 		if !strings.Contains(c.Domain, "youtube.com") {
+			continue
+		}
+		// Filter out non-essential cookies to prevent Google 413 "Request Too Large" errors
+		if !ytEssentialCookies[c.Name] {
 			continue
 		}
 		expr := fmt.Sprintf(`document.cookie="%s=%s; domain=%s; path=%s; secure=%t; samesite=lax"`,
