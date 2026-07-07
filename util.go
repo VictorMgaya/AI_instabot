@@ -29,9 +29,6 @@ var (
 	// Acut
 	run bool
 
-	// Whether we want to run TikTok alongside Instagram
-	tiktokMode bool
-
 	// Whether we want to run tech video repost mode
 	techMode bool
 
@@ -108,7 +105,6 @@ func check(err error) {
 // Parses the options given to the script
 func parseOptions() {
 	flag.BoolVar(&run, "run", false, "Use this option to follow, like and comment")
-	flag.BoolVar(&tiktokMode, "tiktok", false, "Use this option to also run TikTok bot (combine with -run for both)")
 	flag.BoolVar(&techMode, "tech", false, "Use this option to download and repost tech videos with AI descriptions")
 	flag.BoolVar(&unfollow, "sync", false, "Use this option to unfollow those who are not following back")
 	flag.BoolVar(&nomail, "nomail", false, "Use this option to disable the email notifications")

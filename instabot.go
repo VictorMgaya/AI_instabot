@@ -46,22 +46,12 @@ func main() {
 		instabot.ytSourceLoop()
 	} else if run {
 		login()
-		if tiktokMode {
-			log.Println("Starting both Instagram and TikTok simultaneously...")
-			go instabot.loopRandom()
-			tiktokLogin()
-			instabot.tiktokLoop()
-		} else {
-			instabot.loopRandom()
-		}
-	} else if tiktokMode {
-		tiktokLogin()
-		instabot.tiktokLoop()
+		instabot.loopRandom()
 	} else if unfollow {
 		login()
 		instabot.syncFollowers()
 		instabot.updateConfig()
 	} else {
-		log.Println("No mode selected. Use -run, -tech, -yt-source, -sync, or -tiktok. Add -h for help.")
+		log.Println("No mode selected. Use -run, -tech, -yt-source, or -sync. Add -h for help.")
 	}
 }

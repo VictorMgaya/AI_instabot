@@ -121,7 +121,8 @@ func (user *User) Highlights() ([]*Reel, error) {
 
 // Deletes ALL user's instagram stories.
 // If you want to remove a single story, pick one from StoryMedia.Items, and
-//   call Item.Delete()
+//
+//	call Item.Delete()
 //
 // See example: examples/media/deleteStories.go
 func (media *Reel) Delete() error {
