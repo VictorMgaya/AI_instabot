@@ -146,29 +146,35 @@ Rules:
 
 			log.Printf("YTSource: Reposting with caption: %q", caption)
 
-			// Post to Instagram
-			if !dev {
-				_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
-					File:    bytes.NewReader(videoData),
-					Caption: caption,
-				})
-				if err != nil {
-					log.Printf("YTSource: Instagram upload error: %v", err)
+			// Post to Instagram only when -tech flag is also active
+			if techMode {
+				if !dev {
+					_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
+						File:    bytes.NewReader(videoData),
+						Caption: caption,
+					})
+					if err != nil {
+						log.Printf("YTSource: Instagram upload error: %v", err)
+					} else {
+						log.Printf("YTSource: Posted to Instagram ✓")
+					}
 				} else {
-					log.Printf("YTSource: Posted to Instagram ✓")
+					log.Printf("YTSource: [DEV] Would post %d bytes to Instagram", len(videoData))
 				}
-			} else {
-				log.Printf("YTSource: [DEV] Would post %d bytes to Instagram", len(videoData))
 			}
 
-			// Post to YouTube Shorts as well if -youtube is active
+			// Post to YouTube Shorts if -youtube is active
 			if youtubeMode {
 				localPath := fmt.Sprintf("downloads/yt-source-%s.mp4", meta.VideoID)
 				if writeErr := writeVideoFile(localPath, videoData); writeErr == nil {
-					if err := uploadToYouTubeShorts(localPath, caption); err != nil {
-						log.Printf("YTSource: YouTube upload error: %v", err)
+					if !dev {
+						if err := uploadToYouTubeShorts(localPath, caption); err != nil {
+							log.Printf("YTSource: YouTube upload error: %v", err)
+						} else {
+							log.Printf("YTSource: Posted to YouTube Shorts ✓")
+						}
 					} else {
-						log.Printf("YTSource: Posted to YouTube Shorts ✓")
+						log.Printf("YTSource: [DEV] Would upload to YouTube Shorts: %s", localPath)
 					}
 					removeVideoFile(localPath)
 				}
