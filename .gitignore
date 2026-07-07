@@ -11,6 +11,8 @@ key
 session
 # new
 goinsta-session
+# tiktok session
+tiktok-session.json
 
 # Log files
 *.log
@@ -40,3 +42,8 @@ instabot
 # OS files
 .DS_Store
 Thumbs.db
+
+# Sessions & downloads
+youtube-session.json
+config/youtube-cookies.txt
+downloads/

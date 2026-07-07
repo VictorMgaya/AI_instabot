@@ -260,6 +260,20 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 
 	log.Printf("TechRepost: Downloaded %d bytes", len(videoData))
 
+	// Save video locally so it can be uploaded via browser automation
+	localPath := fmt.Sprintf("downloads/repost-%d.mp4", item.Pk)
+	err = os.WriteFile(localPath, videoData, 0644)
+	if err != nil {
+		log.Printf("TechRepost: Local save error: %v", err)
+		localPath = ""
+	} else {
+		log.Printf("TechRepost: Video saved locally at %s", localPath)
+		defer func() {
+			os.Remove(localPath)
+			log.Printf("TechRepost: Cleaned up temporary file %s", localPath)
+		}()
+	}
+
 	caption := myInstabot.generateTechDescription(item)
 
 	log.Printf("TechRepost: Uploading with caption: \"%s\"", caption)
@@ -278,6 +292,13 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 	} else {
 		log.Printf("TechRepost: [DEV MODE] Would upload %d bytes with caption: \"%s\"", len(videoData), caption)
 		techRepostCount++
+	}
+
+	if youtubeMode && localPath != "" {
+		err := uploadToYouTubeShorts(localPath, caption)
+		if err != nil {
+			log.Printf("TechRepost: YouTube upload error: %v", err)
+		}
 	}
 }
 

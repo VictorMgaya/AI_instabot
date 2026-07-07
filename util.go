@@ -40,6 +40,9 @@ var (
 
 	// Used to skip following, liking and commenting same user in this session
 	noduplicate bool
+
+	// Whether we want to upload tech videos to YouTube Shorts
+	youtubeMode bool
 )
 
 // Safety limits
@@ -109,6 +112,7 @@ func parseOptions() {
 	flag.BoolVar(&dev, "dev", false, "Use this option to use the script in development mode : nothing will be done for real")
 	flag.BoolVar(&logs, "logs", false, "Use this option to enable the logfile")
 	flag.BoolVar(&noduplicate, "noduplicate", false, "Use this option to skip following, liking and commenting same user in this session")
+	flag.BoolVar(&youtubeMode, "youtube", false, "Use this option to upload tech videos to YouTube Shorts as well")
 
 	flag.Parse()
 
