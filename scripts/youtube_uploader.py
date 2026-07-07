@@ -11,12 +11,6 @@ def parse_netscape_cookies(filepath):
         print(f"Error: Cookie file not found at {filepath}", file=sys.stderr)
         sys.exit(1)
         
-    essential_names = {
-        "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO",
-        "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID",
-        "__Secure-3PAPISID", "__Secure-1PSIDTS", "__Secure-3PSIDTS", "SIDCC"
-    }
-        
     with open(filepath, "r", encoding="utf-8") as f:
         for line in f:
             line = line.replace("\r", "").strip()
@@ -33,9 +27,6 @@ def parse_netscape_cookies(filepath):
                 continue
                 
             name = parts[5].strip()
-            if name not in essential_names:
-                continue
-                
             domain = parts[0].strip()
             path = parts[2].strip()
             secure = parts[3].strip().upper() == "TRUE"
