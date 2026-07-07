@@ -235,26 +235,24 @@ def main():
             for attempt in range(6):
                 # Method 1: Dispatch native click on done-button
                 closed = page.evaluate("""
-                    (() => {
-                        var btn = document.querySelector('#done-button');
-                        if (btn) {
-                            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                        }
-                        return !document.querySelector('ytcp-uploads-dialog');
-                    })()
+                    var btn = document.querySelector('#done-button');
+                    if (btn) {
+                        btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                    }
+                    var dialog = document.querySelector('ytcp-uploads-dialog');
+                    return !dialog;
                 """)
                 if closed:
                     break
                 
                 # Method 2: Click dialog close button (X)
                 closed = page.evaluate("""
-                    (() => {
-                        var closeBtn = document.querySelector('ytcp-uploads-dialog iron-icon#close-button') ||
-                                       document.querySelector('ytcp-uploads-dialog [aria-label="Close"]') ||
-                                       document.querySelector('ytcp-uploads-dialog #close-button');
-                        if (closeBtn) { closeBtn.click(); }
-                        return !document.querySelector('ytcp-uploads-dialog');
-                    })()
+                    var closeBtn = document.querySelector('ytcp-uploads-dialog iron-icon#close-button') ||
+                                   document.querySelector('ytcp-uploads-dialog [aria-label="Close"]') ||
+                                   document.querySelector('ytcp-uploads-dialog #close-button');
+                    if (closeBtn) { closeBtn.click(); }
+                    var dialog = document.querySelector('ytcp-uploads-dialog');
+                    return !dialog;
                 """)
                 if closed:
                     break
@@ -262,7 +260,7 @@ def main():
                 # Method 3: Press Escape
                 page.keyboard.press("Escape")
                 page.wait_for_timeout(1000)
-                closed = page.evaluate("return !document.querySelector('ytcp-uploads-dialog')")
+                closed = page.evaluate("return document.querySelector('ytcp-uploads-dialog') === null")
                 if closed:
                     break
                 
