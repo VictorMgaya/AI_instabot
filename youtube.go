@@ -2,305 +2,54 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"math/rand"
-	"net/http"
-	"os"
-	"strconv"
-	"strings"
-	"time"
+	"os/exec"
 )
 
 const youtubeCookiesFile = "config/youtube-cookies.txt"
-const youtubeUploadEndpoint = "https://upload.youtube.com/upload/studio"
-const youtubeStudioOrigin = "https://studio.youtube.com"
 
-type youtubeCookie struct {
-	Domain   string
-	Path     string
-	Secure   bool
-	Expiry   string
-	Name     string
-	Value    string
-	HttpOnly bool
-}
-
-// ytEssentialCookies — the only session cookies needed for auth.
-var ytEssentialCookies = map[string]bool{
-	"SID":               true,
-	"HSID":              true,
-	"SSID":              true,
-	"APISID":            true,
-	"SAPISID":           true,
-	"LOGIN_INFO":        true,
-	"__Secure-1PSID":    true,
-	"__Secure-3PSID":    true,
-	"__Secure-1PAPISID": true,
-	"__Secure-3PAPISID": true,
-	"__Secure-1PSIDTS":  true,
-	"__Secure-3PSIDTS":  true,
-	"SIDCC":             true,
-}
-
-// parseYoutubeCookies parses a Netscape-format cookies file.
-// Lines beginning with '#HttpOnly_' are valid cookie lines (not comments) and must be included.
-func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var cookies []youtubeCookie
-	for _, line := range strings.Split(string(data), "\n") {
-		// Strip Windows-style carriage returns
-		line = strings.TrimRight(line, "\r")
-		line = strings.TrimSpace(line)
-		// Skip empty lines and pure comments (# without HttpOnly_)
-		if line == "" {
-			continue
-		}
-		isHttpOnly := strings.HasPrefix(line, "#HttpOnly_")
-		if strings.HasPrefix(line, "#") && !isHttpOnly {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) < 7 {
-			continue
-		}
-		cookies = append(cookies, youtubeCookie{
-			Domain:   strings.TrimRight(parts[0], "\r"),
-			Path:     strings.TrimRight(parts[2], "\r"),
-			Secure:   parts[3] == "TRUE",
-			Expiry:   strings.TrimRight(parts[4], "\r"),
-			Name:     strings.TrimRight(parts[5], "\r"),
-			Value:    strings.TrimRight(parts[6], "\r"),
-			HttpOnly: isHttpOnly,
-		})
-	}
-	return cookies, nil
-}
-
-// diagnoseCookies logs what auth cookies were found for troubleshooting.
-func diagnoseCookies(cookies []youtubeCookie) {
-	found := make(map[string]string)
-	for _, c := range cookies {
-		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
-		if ytEssentialCookies[c.Name] {
-			preview := c.Value
-			if len(preview) > 8 {
-				preview = preview[:8] + "..."
-			}
-			found[c.Name] = fmt.Sprintf("%s (domain=%s)", preview, domain)
-		}
-	}
-	log.Printf("YouTube: Auth cookies found (%d): %v", len(found), found)
-}
-
-// buildCookieHeader returns a Cookie header string from essential session cookies.
-// Includes both .youtube.com and .google.com cookies since YouTube Studio auth
-// depends on Google-issued session tokens.
-func buildCookieHeader(cookies []youtubeCookie) string {
-	seen := make(map[string]bool)
-	var parts []string
-	for _, c := range cookies {
-		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
-		if !strings.Contains(domain, "youtube.com") && !strings.Contains(domain, "google.com") {
-			continue
-		}
-		if !ytEssentialCookies[c.Name] {
-			continue
-		}
-		if seen[c.Name] {
-			continue
-		}
-		seen[c.Name] = true
-		parts = append(parts, c.Name+"="+c.Value)
-	}
-	return strings.Join(parts, "; ")
-}
-
-// computeSAPISIDHASH computes the Authorization header value required by YouTube Studio.
-// Origin MUST be https://studio.youtube.com for the Studio upload API.
-func computeSAPISIDHASH(sapisid string) string {
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	h := sha1.New()
-	h.Write([]byte(ts + " " + sapisid + " " + youtubeStudioOrigin))
-	return fmt.Sprintf("SAPISIDHASH %s_%x", ts, h.Sum(nil))
-}
-
-// privacyStatus returns PUBLIC in live mode, PRIVATE in dev mode.
-func privacyStatus() string {
-	if dev {
-		return "PRIVATE"
-	}
-	return "PUBLIC"
-}
-
-// uploadToYouTubeShorts uploads a local video file to YouTube Shorts using
-// YouTube Studio's internal resumable upload API via direct HTTP — no browser needed.
+// uploadToYouTubeShorts runs the Python Playwright uploader script as a subprocess
+// to handle the YouTube Studio upload pipeline securely and reliably.
 func uploadToYouTubeShorts(videoPath string, description string) error {
-	log.Printf("YouTube: Starting HTTP upload for: %s", videoPath)
+	log.Printf("YouTube: Running Python Playwright uploader for: %s", videoPath)
 
-	cookies, err := parseYoutubeCookies(youtubeCookiesFile)
-	if err != nil {
-		return fmt.Errorf("failed to read YouTube cookies: %w", err)
+	// Build the command arguments
+	args := []string{
+		"scripts/youtube_uploader.py",
+		"--video", videoPath,
+		"--title", description, // title defaults to description
+		"--description", description,
+		"--cookies", youtubeCookiesFile,
 	}
 
-	// Find SAPISID for auth — prefer __Secure-3PAPISID for HTTPS Studio endpoints
-	// Specifically prefer google.com domain since that's where YouTube auth tokens live
-	var sapisid, sapisidDomain string
-	for _, c := range cookies {
-		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
-		if c.Name == "__Secure-3PAPISID" && strings.Contains(domain, "google.com") {
-			sapisid = c.Value
-			sapisidDomain = domain
-			break
+	if dev {
+		args = append(args, "--dev")
+	}
+
+	// Run using the python execution binary inside the virtual environment
+	cmd := exec.Command("./venv/bin/python", args...)
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	stdoutStr := stdoutBuf.String()
+	stderrStr := stderrBuf.String()
+
+	// Print stdout to keep the console logging transparent
+	if stdoutStr != "" {
+		log.Printf("YouTube Uploader Output:\n%s", stdoutStr)
+	}
+
+	if err != nil {
+		if stderrStr != "" {
+			log.Printf("YouTube Uploader Error Output:\n%s", stderrStr)
 		}
-	}
-	if sapisid == "" {
-		for _, c := range cookies {
-			domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
-			if c.Name == "SAPISID" && strings.Contains(domain, "google.com") {
-				sapisid = c.Value
-				sapisidDomain = domain
-				break
-			}
-		}
-	}
-	if sapisid == "" {
-		for _, c := range cookies {
-			if c.Name == "__Secure-3PAPISID" || c.Name == "SAPISID" {
-				domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
-				sapisid = c.Value
-				sapisidDomain = domain
-				break
-			}
-		}
-	}
-	if sapisid == "" {
-		diagnoseCookies(cookies)
-		return fmt.Errorf("SAPISID/__Secure-3PAPISID not found — please re-export your YouTube cookies")
-	}
-	preview := sapisid
-	if len(preview) > 8 {
-		preview = preview[:8] + "..."
-	}
-	log.Printf("YouTube: Using SAPISID %s from domain %s", preview, sapisidDomain)
-	diagnoseCookies(cookies)
-
-	title := description
-	if len(title) > 95 {
-		title = title[:92] + "..."
+		return fmt.Errorf("playwright uploader failed: %w", err)
 	}
 
-	cookieHeader := buildCookieHeader(cookies)
-	authHeader := computeSAPISIDHASH(sapisid)
-
-	// Read video file
-	videoData, err := os.ReadFile(videoPath)
-	if err != nil {
-		return fmt.Errorf("failed to read video file: %w", err)
-	}
-	log.Printf("YouTube: Video size: %d bytes", len(videoData))
-
-	// Step 1: Initiate resumable upload session
-	log.Println("YouTube: Requesting upload session from YouTube Studio...")
-	frontendID := fmt.Sprintf("studio-%d-%d", time.Now().UnixNano(), rand.Intn(99999))
-	initBody := map[string]interface{}{
-		"frontendUploadId": frontendID,
-		"initialMetadata": map[string]interface{}{
-			"title":       map[string]string{"newTitle": title},
-			"description": map[string]string{"newDescription": description},
-			"privacy":     map[string]string{"newPrivacy": privacyStatus()},
-			"draftState":  map[string]interface{}{"isDraft": false},
-		},
-	}
-	initJSON, _ := json.Marshal(initBody)
-
-	req, err := http.NewRequest("POST", youtubeUploadEndpoint, bytes.NewReader(initJSON))
-	if err != nil {
-		return fmt.Errorf("failed to build init request: %w", err)
-	}
-	setCommonHeaders(req, cookieHeader, authHeader)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Goog-Upload-Protocol", "resumable")
-	req.Header.Set("X-Goog-Upload-Command", "start")
-	req.Header.Set("X-Goog-Upload-Header-Content-Length", strconv.Itoa(len(videoData)))
-	req.Header.Set("X-Goog-Upload-Header-Content-Type", "video/mp4")
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("upload session init failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload init returned HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	uploadURL := resp.Header.Get("X-Goog-Upload-URL")
-	if uploadURL == "" {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("no X-Goog-Upload-URL in response — YouTube may have changed API: %s", string(body))
-	}
-	log.Printf("YouTube: Upload session created. Uploading %d bytes...", len(videoData))
-
-	// Step 2: Upload video bytes to the resumable URL
-	uploadReq, err := http.NewRequest("PUT", uploadURL, bytes.NewReader(videoData))
-	if err != nil {
-		return fmt.Errorf("failed to build upload request: %w", err)
-	}
-	setCommonHeaders(uploadReq, cookieHeader, authHeader)
-	uploadReq.Header.Set("Content-Type", "video/mp4")
-	uploadReq.Header.Set("X-Goog-Upload-Protocol", "resumable")
-	uploadReq.Header.Set("X-Goog-Upload-Command", "upload, finalize")
-	uploadReq.Header.Set("X-Goog-Upload-Offset", "0")
-	uploadReq.ContentLength = int64(len(videoData))
-
-	uploadClient := &http.Client{Timeout: 10 * time.Minute}
-	uploadResp, err := uploadClient.Do(uploadReq)
-	if err != nil {
-		return fmt.Errorf("video upload request failed: %w", err)
-	}
-	defer uploadResp.Body.Close()
-
-	respBody, _ := io.ReadAll(uploadResp.Body)
-	if uploadResp.StatusCode != 200 && uploadResp.StatusCode != 201 {
-		return fmt.Errorf("video upload returned HTTP %d: %s", uploadResp.StatusCode, string(respBody))
-	}
-
-	// Parse video ID from response if present
-	var result map[string]interface{}
-	if json.Unmarshal(respBody, &result) == nil {
-		if vid, ok := result["videoId"].(string); ok && vid != "" {
-			log.Printf("YouTube: Upload successful! Video ID: %s ✓", vid)
-			return nil
-		}
-	}
-	log.Printf("YouTube: Upload completed ✓")
+	log.Println("YouTube: Video uploaded successfully ✓")
 	return nil
-}
-
-// min returns the smaller of two ints.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// setCommonHeaders sets request headers shared across all YouTube Studio API calls.
-func setCommonHeaders(req *http.Request, cookieHeader, authHeader string) {
-	req.Header.Set("Authorization", authHeader)
-	req.Header.Set("Cookie", cookieHeader)
-	req.Header.Set("Origin", youtubeStudioOrigin)
-	req.Header.Set("Referer", "https://studio.youtube.com/")
-	req.Header.Set("X-Origin", youtubeStudioOrigin)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-	req.Header.Set("X-Goog-Authuser", "0")
 }
