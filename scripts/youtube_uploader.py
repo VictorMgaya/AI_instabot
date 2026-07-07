@@ -97,17 +97,35 @@ def main():
                 page.screenshot(path="downloads/playwright_expired_cookies.png")
                 sys.exit(1)
                 
-            print("YouTube Uploader: Logged in successfully. Opening upload wizard...")
-            
-            # Click direct upload button if visible, fallback to Create icon
-            upload_btn = page.locator('#upload-button, [id="upload-button"], [aria-label="Upload videos"]')
+            print("YouTube Uploader: Logged in successfully. Dismissing any welcome/onboarding dialogs...")
+            # Dismiss any popup overlays or Swahili onboarding steps (e.g. "Inayofuata" / Next cards)
+            for i in range(3):
+                page.evaluate("""
+                    (function() {
+                        var buttons = Array.from(document.querySelectorAll('ytcp-button, paper-button, button, ytcp-button-shape'));
+                        var dismissKeywords = ['got it', 'ok', 'close', 'funga', 'inayofuata', 'nimekuelewa', 'dismiss', 'done', 'next', 'save', 'agree'];
+                        buttons.forEach(btn => {
+                            var text = btn.innerText.toLowerCase();
+                            if (dismissKeywords.some(kw => text.includes(kw))) {
+                                btn.click();
+                            }
+                        });
+                    })()
+                """)
+                page.wait_for_timeout(1000)
+
+            print("YouTube Uploader: Opening upload wizard...")
+            # Try direct upload arrow icon in top right first
+            upload_btn = page.locator('#upload-button, [id="upload-button"], [aria-label*="upload"], [aria-label*="Pakia"]')
             if upload_btn.is_visible():
                 upload_btn.click()
             else:
-                page.click('#create-icon, [id="create-icon"]')
-                page.wait_for_timeout(1000)
-                # Select Upload option from dropdown
-                page.click('text=Upload videos, ytcp-text-menu-item')
+                # Fallback to Buni/Create button dropdown click
+                create_btn = page.locator('#create-icon, [id="create-icon"], ytcp-button:has-text("Buni"), ytcp-button:has-text("Create")')
+                create_btn.click()
+                page.wait_for_timeout(1500)
+                # Click the first item in the dropdown list (always 'Upload videos' or 'Pakia video')
+                page.locator('paper-item, ytcp-text-menu-item, tp-yt-paper-item').first.click()
                 
             page.wait_for_selector('input[type="file"]', timeout=30000)
             print("YouTube Uploader: Selecting video file...")
