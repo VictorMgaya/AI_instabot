@@ -47,6 +47,7 @@ var ytEssentialCookies = map[string]bool{
 }
 
 // parseYoutubeCookies parses a Netscape-format cookies file.
+// Lines beginning with '#HttpOnly_' are valid cookie lines (not comments) and must be included.
 func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -54,8 +55,15 @@ func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
 	}
 	var cookies []youtubeCookie
 	for _, line := range strings.Split(string(data), "\n") {
+		// Strip Windows-style carriage returns
+		line = strings.TrimRight(line, "\r")
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		// Skip empty lines and pure comments (# without HttpOnly_)
+		if line == "" {
+			continue
+		}
+		isHttpOnly := strings.HasPrefix(line, "#HttpOnly_")
+		if strings.HasPrefix(line, "#") && !isHttpOnly {
 			continue
 		}
 		parts := strings.Split(line, "\t")
@@ -63,16 +71,32 @@ func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
 			continue
 		}
 		cookies = append(cookies, youtubeCookie{
-			Domain:   parts[0],
-			Path:     parts[2],
+			Domain:   strings.TrimRight(parts[0], "\r"),
+			Path:     strings.TrimRight(parts[2], "\r"),
 			Secure:   parts[3] == "TRUE",
-			Expiry:   parts[4],
-			Name:     parts[5],
-			Value:    parts[6],
-			HttpOnly: strings.HasPrefix(parts[0], "#HttpOnly_"),
+			Expiry:   strings.TrimRight(parts[4], "\r"),
+			Name:     strings.TrimRight(parts[5], "\r"),
+			Value:    strings.TrimRight(parts[6], "\r"),
+			HttpOnly: isHttpOnly,
 		})
 	}
 	return cookies, nil
+}
+
+// diagnoseCookies logs what auth cookies were found for troubleshooting.
+func diagnoseCookies(cookies []youtubeCookie) {
+	found := make(map[string]string)
+	for _, c := range cookies {
+		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
+		if ytEssentialCookies[c.Name] {
+			preview := c.Value
+			if len(preview) > 8 {
+				preview = preview[:8] + "..."
+			}
+			found[c.Name] = fmt.Sprintf("%s (domain=%s)", preview, domain)
+		}
+	}
+	log.Printf("YouTube: Auth cookies found (%d): %v", len(found), found)
 }
 
 // buildCookieHeader returns a Cookie header string from essential session cookies.
@@ -126,25 +150,46 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 	}
 
 	// Find SAPISID for auth — prefer __Secure-3PAPISID for HTTPS Studio endpoints
-	var sapisid string
+	// Specifically prefer google.com domain since that's where YouTube auth tokens live
+	var sapisid, sapisidDomain string
 	for _, c := range cookies {
-		if c.Name == "__Secure-3PAPISID" {
+		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
+		if c.Name == "__Secure-3PAPISID" && strings.Contains(domain, "google.com") {
 			sapisid = c.Value
+			sapisidDomain = domain
 			break
 		}
 	}
 	if sapisid == "" {
 		for _, c := range cookies {
-			if c.Name == "SAPISID" {
+			domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
+			if c.Name == "SAPISID" && strings.Contains(domain, "google.com") {
 				sapisid = c.Value
+				sapisidDomain = domain
 				break
 			}
 		}
 	}
 	if sapisid == "" {
+		for _, c := range cookies {
+			if c.Name == "__Secure-3PAPISID" || c.Name == "SAPISID" {
+				domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
+				sapisid = c.Value
+				sapisidDomain = domain
+				break
+			}
+		}
+	}
+	if sapisid == "" {
+		diagnoseCookies(cookies)
 		return fmt.Errorf("SAPISID/__Secure-3PAPISID not found — please re-export your YouTube cookies")
 	}
-	log.Printf("YouTube: Using SAPISID starting with: %s...", sapisid[:min(8, len(sapisid))])
+	preview := sapisid
+	if len(preview) > 8 {
+		preview = preview[:8] + "..."
+	}
+	log.Printf("YouTube: Using SAPISID %s from domain %s", preview, sapisidDomain)
+	diagnoseCookies(cookies)
 
 	title := description
 	if len(title) > 95 {
