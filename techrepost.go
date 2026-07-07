@@ -182,6 +182,11 @@ func (myInstabot MyInstabot) techExploreLoop() {
 	rand.Seed(time.Now().UnixNano())
 	os.MkdirAll("downloads", 0o755)
 
+	if ytSourceMode {
+		log.Println("YTSource: Launching YouTube Shorts crawler in parallel...")
+		go myInstabot.ytSourceLoop()
+	}
+
 	for {
 		log.Println("TechRepost: Scanning explore for qualifying tech videos...")
 		myInstabot.techBrowseExplore()
@@ -262,15 +267,13 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 
 	// Save video locally so it can be uploaded via browser automation
 	localPath := fmt.Sprintf("downloads/repost-%d.mp4", item.Pk)
-	err = os.WriteFile(localPath, videoData, 0644)
-	if err != nil {
+	if err := writeVideoFile(localPath, videoData); err != nil {
 		log.Printf("TechRepost: Local save error: %v", err)
 		localPath = ""
 	} else {
 		log.Printf("TechRepost: Video saved locally at %s", localPath)
 		defer func() {
-			os.Remove(localPath)
-			log.Printf("TechRepost: Cleaned up temporary file %s", localPath)
+			removeVideoFile(localPath)
 		}()
 	}
 
