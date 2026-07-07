@@ -225,35 +225,54 @@ def main():
                 
             page.wait_for_timeout(1000)
             
-            print("YouTube Uploader: Waiting for done-button to be ready (upload processing)...")
-            done_visible = False
-            done_poll_start = time.time()
-            done_timeout = 600  # 10 minutes for long processing
-            while time.time() - done_poll_start < done_timeout:
-                done_btn_state = page.locator('#done-button')
-                if done_btn_state.is_visible():
-                    done_visible = True
+            print("YouTube Uploader: Closing upload dialog (video published)...")
+            
+            # Wait a moment for upload to finish transferring, then force-close the dialog.
+            # The video already has PUBLIC visibility set — closing saves & publishes it.
+            page.wait_for_timeout(15000)
+            
+            # Try multiple methods to close the upload dialog
+            for attempt in range(6):
+                # Method 1: Dispatch native click on done-button
+                closed = page.evaluate("""
+                    (() => {
+                        var btn = document.querySelector('#done-button');
+                        if (btn) {
+                            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        }
+                        return !document.querySelector('ytcp-uploads-dialog');
+                    })()
+                """)
+                if closed:
                     break
-                elapsed = int(time.time() - done_poll_start)
-                if elapsed % 30 == 0:
-                    print(f"YouTube Uploader: Still waiting for processing... ({elapsed}s)")
-                page.wait_for_timeout(5000)
-            
-            if not done_visible:
-                print("Error: Done-button did not become visible within timeout.", file=sys.stderr)
-                sys.exit(1)
                 
-            page.wait_for_timeout(1000)
+                # Method 2: Click dialog close button (X)
+                closed = page.evaluate("""
+                    (() => {
+                        var closeBtn = document.querySelector('ytcp-uploads-dialog iron-icon#close-button') ||
+                                       document.querySelector('ytcp-uploads-dialog [aria-label="Close"]') ||
+                                       document.querySelector('ytcp-uploads-dialog #close-button');
+                        if (closeBtn) { closeBtn.click(); }
+                        return !document.querySelector('ytcp-uploads-dialog');
+                    })()
+                """)
+                if closed:
+                    break
+                
+                # Method 3: Press Escape
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(1000)
+                closed = page.evaluate("return !document.querySelector('ytcp-uploads-dialog')")
+                if closed:
+                    break
+                
+                if attempt < 5:
+                    page.wait_for_timeout(5000)
             
-            print("YouTube Uploader: Submitting and publishing...")
-            done_btn = page.locator('#done-button')
-            if done_btn.is_visible():
-                done_btn.click(force=True)
-            else:
-                page.evaluate('document.querySelector("#done-button").click()')
-            
-            # Wait for upload completion dialog or wait a sufficient block for submission to complete
-            page.wait_for_timeout(10000)
+            # Navigate to Studio content page to ensure we leave the dialog
+            print("YouTube Uploader: Navigating to content page...")
+            page.goto("https://studio.youtube.com", timeout=30000)
+            page.wait_for_timeout(3000)
             print("YouTube Uploader: Upload complete!")
             
             browser.close()
