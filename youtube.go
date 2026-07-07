@@ -1,66 +1,35 @@
 package main
 
 import (
-	"context"
+	"bytes"
+	"crypto/sha1"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 )
 
 const youtubeCookiesFile = "config/youtube-cookies.txt"
+const youtubeUploadEndpoint = "https://upload.youtube.com/upload/studio"
+const youtubeOrigin = "https://www.youtube.com"
 
 type youtubeCookie struct {
-	Domain  string
-	Path    string
-	Secure  bool
-	Expires int64
-	Name    string
-	Value   string
+	Domain   string
+	Path     string
+	Secure   bool
+	Expiry   string
+	Name     string
+	Value    string
+	HttpOnly bool
 }
 
-// parseYoutubeCookies reads and parses cookies in Netscape format.
-func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var cookies []youtubeCookie
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Split(line, "\t")
-		if len(fields) < 7 {
-			continue
-		}
-		domain := fields[0]
-		pathVal := fields[2]
-		secure := fields[3] == "TRUE"
-		expires, _ := strconv.ParseInt(fields[4], 10, 64)
-		name := fields[5]
-		value := fields[6]
-
-		cookies = append(cookies, youtubeCookie{
-			Domain:  domain,
-			Path:    pathVal,
-			Secure:  secure,
-			Expires: expires,
-			Name:    name,
-			Value:   value,
-		})
-	}
-	return cookies, nil
-}
-
+// ytEssentialCookies — the only session cookies needed for auth.
 var ytEssentialCookies = map[string]bool{
 	"SID":               true,
 	"HSID":              true,
@@ -77,327 +46,199 @@ var ytEssentialCookies = map[string]bool{
 	"SIDCC":             true,
 }
 
-// setYoutubeCookies injects YouTube cookies into the browser context.
-func setYoutubeCookies(ctx context.Context, cookies []youtubeCookie) error {
-	for _, c := range cookies {
-		// Only set cookies relevant to youtube.com
-		if !strings.Contains(c.Domain, "youtube.com") {
+// parseYoutubeCookies parses a Netscape-format cookies file.
+func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cookies []youtubeCookie
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// Filter out non-essential cookies to prevent Google 413 "Request Too Large" errors
+		parts := strings.Split(line, "\t")
+		if len(parts) < 7 {
+			continue
+		}
+		cookies = append(cookies, youtubeCookie{
+			Domain:   parts[0],
+			Path:     parts[2],
+			Secure:   parts[3] == "TRUE",
+			Expiry:   parts[4],
+			Name:     parts[5],
+			Value:    parts[6],
+			HttpOnly: strings.HasPrefix(parts[0], "#HttpOnly_"),
+		})
+	}
+	return cookies, nil
+}
+
+// buildCookieHeader returns a Cookie header string from essential session cookies.
+func buildCookieHeader(cookies []youtubeCookie) string {
+	var parts []string
+	for _, c := range cookies {
+		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
+		if !strings.Contains(domain, "youtube.com") && !strings.Contains(domain, "google.com") {
+			continue
+		}
 		if !ytEssentialCookies[c.Name] {
 			continue
 		}
-		expr := fmt.Sprintf(`document.cookie="%s=%s; domain=%s; path=%s; secure=%t; samesite=lax"`,
-			c.Name, c.Value, c.Domain, c.Path, c.Secure)
-		var out string
-		if err := chromedp.Run(ctx, chromedp.EvaluateAsDevTools(expr, &out)); err != nil {
-			return fmt.Errorf("setting cookie %s: %w", c.Name, err)
-		}
+		parts = append(parts, c.Name+"="+c.Value)
 	}
-	return nil
+	return strings.Join(parts, "; ")
 }
 
-// saveDebugScreenshot captures a screenshot of the current page for troubleshooting.
-func saveDebugScreenshot(ctx context.Context, name string) {
-	var buf []byte
-	if err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&buf)); err == nil {
-		_ = os.WriteFile(fmt.Sprintf("downloads/%s.png", name), buf, 0o644)
-		log.Printf("YouTube: Saved debug screenshot to downloads/%s.png", name)
-	} else {
-		log.Printf("YouTube: Failed to capture debug screenshot: %v", err)
-	}
+// computeSAPISIDHASH computes the Authorization header value required by YouTube Studio.
+func computeSAPISIDHASH(sapisid string) string {
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	h := sha1.New()
+	h.Write([]byte(ts + " " + sapisid + " " + youtubeOrigin))
+	return fmt.Sprintf("SAPISIDHASH %s_%x", ts, h.Sum(nil))
 }
 
-// uploadToYouTubeShorts uploads a local video to YouTube Shorts using chromedp.
+// privacyStatus returns PUBLIC in live mode, PRIVATE in dev mode.
+func privacyStatus() string {
+	if dev {
+		return "PRIVATE"
+	}
+	return "PUBLIC"
+}
+
+// uploadToYouTubeShorts uploads a local video file to YouTube Shorts using
+// YouTube Studio's internal resumable upload API via direct HTTP — no browser needed.
 func uploadToYouTubeShorts(videoPath string, description string) error {
-	log.Printf("YouTube: Starting upload for video: %s", videoPath)
+	log.Printf("YouTube: Starting HTTP upload for: %s", videoPath)
 
 	cookies, err := parseYoutubeCookies(youtubeCookiesFile)
 	if err != nil {
-		return fmt.Errorf("failed to read YouTube cookies: %w. Please export cookies to %s", err, youtubeCookiesFile)
+		return fmt.Errorf("failed to read YouTube cookies: %w", err)
 	}
 
-	// Prepare short title: max 95 chars (YouTube limit is 100)
+	// Find SAPISID for auth
+	var sapisid string
+	for _, c := range cookies {
+		if c.Name == "SAPISID" {
+			sapisid = c.Value
+			break
+		}
+	}
+	if sapisid == "" {
+		for _, c := range cookies {
+			if c.Name == "__Secure-3PAPISID" {
+				sapisid = c.Value
+				break
+			}
+		}
+	}
+	if sapisid == "" {
+		return fmt.Errorf("SAPISID not found in cookies — please re-export your YouTube cookies")
+	}
+
 	title := description
 	if len(title) > 95 {
 		title = title[:92] + "..."
 	}
 
-	// Anti-detection script
-	antiDetectJS := `
-		Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-		Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-		Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-		window.chrome = {runtime: {}};
-	`
+	cookieHeader := buildCookieHeader(cookies)
+	authHeader := computeSAPISIDHASH(sapisid)
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(),
-		append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.Flag("disable-blink-features", "AutomationControlled"),
-			chromedp.Flag("disable-web-security", false),
-			chromedp.Flag("disable-features", "TranslateUI"),
-			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-		)...,
-	)
-	defer allocCancel()
+	// Read video file
+	videoData, err := os.ReadFile(videoPath)
+	if err != nil {
+		return fmt.Errorf("failed to read video file: %w", err)
+	}
+	log.Printf("YouTube: Video size: %d bytes", len(videoData))
 
-	ctx, ctxCancel := chromedp.NewContext(allocCtx)
-	defer ctxCancel()
+	// Step 1: Initiate resumable upload session
+	log.Println("YouTube: Requesting upload session from YouTube Studio...")
+	frontendID := fmt.Sprintf("studio-%d-%d", time.Now().UnixNano(), rand.Intn(99999))
+	initBody := map[string]interface{}{
+		"frontendUploadId": frontendID,
+		"initialMetadata": map[string]interface{}{
+			"title":       map[string]string{"newTitle": title},
+			"description": map[string]string{"newDescription": description},
+			"privacy":     map[string]string{"newPrivacy": privacyStatus()},
+			"draftState":  map[string]interface{}{"isDraft": false},
+		},
+	}
+	initJSON, _ := json.Marshal(initBody)
 
-	// Apply a strict 2.5-minute timeout to the entire upload operation to prevent hangs
-	runCtx, runCancel := context.WithTimeout(ctx, 150*time.Second)
-	defer runCancel()
+	req, err := http.NewRequest("POST", youtubeUploadEndpoint, bytes.NewReader(initJSON))
+	if err != nil {
+		return fmt.Errorf("failed to build init request: %w", err)
+	}
+	setCommonHeaders(req, cookieHeader, authHeader)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Goog-Upload-Protocol", "resumable")
+	req.Header.Set("X-Goog-Upload-Command", "start")
+	req.Header.Set("X-Goog-Upload-Header-Content-Length", strconv.Itoa(len(videoData)))
+	req.Header.Set("X-Goog-Upload-Header-Content-Type", "video/mp4")
 
-	// Helper to handle error by taking a screenshot before returning
-	wrapError := func(stepName string, err error) error {
-		saveDebugScreenshot(runCtx, "youtube_upload_error")
-		return fmt.Errorf("YouTube: %s failed: %w", stepName, err)
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload session init failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload init returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Inject anti-detection
-	if err := chromedp.Run(runCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		_, err := page.AddScriptToEvaluateOnNewDocument(antiDetectJS).Do(ctx)
-		return err
-	})); err != nil {
-		return fmt.Errorf("failed to inject anti-detect: %w", err)
+	uploadURL := resp.Header.Get("X-Goog-Upload-URL")
+	if uploadURL == "" {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("no X-Goog-Upload-URL in response — YouTube may have changed API: %s", string(body))
+	}
+	log.Printf("YouTube: Upload session created. Uploading %d bytes...", len(videoData))
+
+	// Step 2: Upload video bytes to the resumable URL
+	uploadReq, err := http.NewRequest("PUT", uploadURL, bytes.NewReader(videoData))
+	if err != nil {
+		return fmt.Errorf("failed to build upload request: %w", err)
+	}
+	setCommonHeaders(uploadReq, cookieHeader, authHeader)
+	uploadReq.Header.Set("Content-Type", "video/mp4")
+	uploadReq.Header.Set("X-Goog-Upload-Protocol", "resumable")
+	uploadReq.Header.Set("X-Goog-Upload-Command", "upload, finalize")
+	uploadReq.Header.Set("X-Goog-Upload-Offset", "0")
+	uploadReq.ContentLength = int64(len(videoData))
+
+	uploadClient := &http.Client{Timeout: 10 * time.Minute}
+	uploadResp, err := uploadClient.Do(uploadReq)
+	if err != nil {
+		return fmt.Errorf("video upload request failed: %w", err)
+	}
+	defer uploadResp.Body.Close()
+
+	respBody, _ := io.ReadAll(uploadResp.Body)
+	if uploadResp.StatusCode != 200 && uploadResp.StatusCode != 201 {
+		return fmt.Errorf("video upload returned HTTP %d: %s", uploadResp.StatusCode, string(respBody))
 	}
 
-	// 1. Go to robots.txt to set cookies
-	log.Println("YouTube: Initializing browser session...")
-	if err := chromedp.Run(runCtx,
-		chromedp.Navigate("https://www.youtube.com/robots.txt"),
-		chromedp.Sleep(2*time.Second),
-	); err != nil {
-		return wrapError("initialize session", err)
-	}
-
-	// 2. Set cookies
-	if err := setYoutubeCookies(runCtx, cookies); err != nil {
-		return wrapError("inject cookies", err)
-	}
-
-	// 3. Navigate to YouTube Studio dashboard
-	log.Println("YouTube: Loading YouTube Studio...")
-	var currentURL string
-	if err := chromedp.Run(runCtx,
-		chromedp.Navigate("https://studio.youtube.com"),
-		chromedp.Sleep(8*time.Second),
-		chromedp.Location(&currentURL),
-	); err != nil {
-		return wrapError("load studio page", err)
-	}
-
-	if strings.Contains(currentURL, "accounts.google.com") {
-		return wrapError("verify login", fmt.Errorf("cookies expired or invalid, redirected to login page: %s", currentURL))
-	}
-
-	log.Println("YouTube: Login verified successfully")
-
-	// 4. Click direct Upload button in the top-right header (more stable than Create menu)
-	log.Println("YouTube: Opening upload wizard...")
-	var uploadTriggered string
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(`
-			(function() {
-				// Try direct upload button first
-				var directBtn = document.querySelector('#upload-button') || document.querySelector('[id="upload-button"]') || document.querySelector('[aria-label="Upload videos"]');
-				if (directBtn) {
-					directBtn.click();
-					return "true";
-				}
-				// Fallback to Create dropdown click
-				var createBtn = document.querySelector('#create-icon') || document.querySelector('[id="create-icon"]');
-				if (createBtn) {
-					createBtn.click();
-					return "dropdown";
-				}
-				return "false";
-			})()
-		`, &uploadTriggered),
-		chromedp.Sleep(2*time.Second),
-	)
-	if err != nil || uploadTriggered == "false" {
-		return wrapError("locate upload/create button", fmt.Errorf("trigger state: %s, err: %v", uploadTriggered, err))
-	}
-
-	// If it had to open the dropdown, click the Upload option
-	if uploadTriggered == "dropdown" {
-		var menuClicked bool
-		err = chromedp.Run(runCtx,
-			chromedp.Evaluate(`
-				(function() {
-					var items = Array.from(document.querySelectorAll('paper-item, ytcp-text-menu-item, tp-yt-paper-item'));
-					var uploadItem = items.find(el => el.innerText.includes('Upload videos'));
-					if (!uploadItem) return false;
-					uploadItem.click();
-					return true;
-				})()
-			`, &menuClicked),
-			chromedp.Sleep(3*time.Second),
-		)
-		if err != nil || !menuClicked {
-			return wrapError("click upload menu item", fmt.Errorf("menu clicked: %v, err: %v", menuClicked, err))
+	// Parse video ID from response if present
+	var result map[string]interface{}
+	if json.Unmarshal(respBody, &result) == nil {
+		if vid, ok := result["videoId"].(string); ok && vid != "" {
+			log.Printf("YouTube: Upload successful! Video ID: %s ✓", vid)
+			return nil
 		}
 	}
-
-	// 5. Select video file
-	log.Printf("YouTube: Selecting file %s...", videoPath)
-	err = chromedp.Run(runCtx,
-		chromedp.WaitReady(`input[type="file"]`, chromedp.ByQuery),
-		chromedp.SetUploadFiles(`input[type="file"]`, []string{videoPath}, chromedp.ByQuery),
-		chromedp.Sleep(5*time.Second),
-	)
-	if err != nil {
-		return wrapError("select upload file", err)
-	}
-
-	// 6. Enter Metadata
-	log.Println("YouTube: Entering title and description...")
-	fillMetadataJS := fmt.Sprintf(`
-		(function() {
-			var titleBox = document.querySelector('#title-textarea #textbox');
-			var descBox = document.querySelector('#description-textarea #textbox');
-			if (titleBox) {
-				titleBox.innerText = %q;
-				titleBox.dispatchEvent(new Event('input', { bubbles: true }));
-			}
-			if (descBox) {
-				descBox.innerText = %q;
-				descBox.dispatchEvent(new Event('input', { bubbles: true }));
-			}
-			return !!(titleBox && descBox);
-		})()
-	`, title, description)
-
-	var success bool
-	err = chromedp.Run(runCtx,
-		chromedp.WaitVisible(`#title-textarea #textbox`, chromedp.ByQuery),
-		chromedp.Evaluate(fillMetadataJS, &success),
-	)
-	if err != nil || !success {
-		return wrapError("fill metadata fields", fmt.Errorf("success: %v, err: %v", success, err))
-	}
-	chromedp.Run(runCtx, chromedp.Sleep(2*time.Second))
-
-	// 7. Select 'Not made for kids' (mandatory)
-	log.Println("YouTube: Setting audience details...")
-	var kidsSuccess bool
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(`
-			(function() {
-				var radio = document.querySelector('[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]') || document.querySelector('paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]') || document.querySelector('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]');
-				if (!radio) return false;
-				radio.click();
-				return true;
-			})()
-		`, &kidsSuccess),
-		chromedp.Sleep(1*time.Second),
-	)
-	if err != nil || !kidsSuccess {
-		return wrapError("set made-for-kids choice", fmt.Errorf("success: %v, err: %v", kidsSuccess, err))
-	}
-
-	// 8. Wizard Step 1 -> Step 2
-	log.Println("YouTube: Advancing wizard (Details -> Video Elements)...")
-	var next1Success bool
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(`
-			(function() {
-				var btn = document.querySelector('[id="next-button"]');
-				if (!btn) return false;
-				btn.click();
-				return true;
-			})()
-		`, &next1Success),
-		chromedp.Sleep(2*time.Second),
-	)
-	if err != nil || !next1Success {
-		return wrapError("details next button", fmt.Errorf("success: %v, err: %v", next1Success, err))
-	}
-
-	// 9. Wizard Step 2 -> Step 3
-	log.Println("YouTube: Advancing wizard (Video Elements -> Checks)...")
-	var next2Success bool
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(`
-			(function() {
-				var btn = document.querySelector('[id="next-button"]');
-				if (!btn) return false;
-				btn.click();
-				return true;
-			})()
-		`, &next2Success),
-		chromedp.Sleep(2*time.Second),
-	)
-	if err != nil || !next2Success {
-		return wrapError("video elements next button", fmt.Errorf("success: %v, err: %v", next2Success, err))
-	}
-
-	// 10. Wizard Step 3 -> Step 4 (Visibility)
-	log.Println("YouTube: Advancing wizard (Checks -> Visibility)...")
-	var next3Success bool
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(`
-			(function() {
-				var btn = document.querySelector('[id="next-button"]');
-				if (!btn) return false;
-				btn.click();
-				return true;
-			})()
-		`, &next3Success),
-		chromedp.Sleep(2*time.Second),
-	)
-	if err != nil || !next3Success {
-		return wrapError("checks next button", fmt.Errorf("success: %v, err: %v", next3Success, err))
-	}
-
-	// 11. Set Visibility and Publish
-	var visibilityVal string
-	if dev {
-		log.Println("YouTube: [DEV MODE] Setting visibility to PRIVATE")
-		visibilityVal = "PRIVATE"
-	} else {
-		log.Println("YouTube: Setting visibility to PUBLIC")
-		visibilityVal = "PUBLIC"
-	}
-
-	var visibilitySuccess bool
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(fmt.Sprintf(`
-			(function() {
-				var radio = document.querySelector('[name="%s"]') || document.querySelector('paper-radio-button[name="%s"]') || document.querySelector('tp-yt-paper-radio-button[name="%s"]');
-				if (!radio) return false;
-				radio.click();
-				return true;
-			})()
-		`, visibilityVal, visibilityVal, visibilityVal), &visibilitySuccess),
-		chromedp.Sleep(1*time.Second),
-	)
-	if err != nil || !visibilitySuccess {
-		return wrapError("set visibility choice", fmt.Errorf("success: %v, err: %v", visibilitySuccess, err))
-	}
-
-	// Click Done / Save / Publish
-	log.Println("YouTube: Publishing video...")
-	var doneSuccess bool
-	err = chromedp.Run(runCtx,
-		chromedp.Evaluate(`
-			(function() {
-				var btn = document.querySelector('[id="done-button"]');
-				if (!btn) return false;
-				btn.click();
-				return true;
-			})()
-		`, &doneSuccess),
-		chromedp.Sleep(10*time.Second),
-	)
-	if err != nil || !doneSuccess {
-		return wrapError("publish done button", fmt.Errorf("success: %v, err: %v", doneSuccess, err))
-	}
-
-	log.Printf("YouTube: Upload and publish completed successfully ✓")
+	log.Printf("YouTube: Upload completed ✓")
 	return nil
 }
 
+// setCommonHeaders sets request headers shared across all YouTube Studio API calls.
+func setCommonHeaders(req *http.Request, cookieHeader, authHeader string) {
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("Cookie", cookieHeader)
+	req.Header.Set("Origin", youtubeOrigin)
+	req.Header.Set("Referer", "https://studio.youtube.com/")
+	req.Header.Set("X-Origin", youtubeOrigin)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	req.Header.Set("X-Goog-Authuser", "0")
+}
