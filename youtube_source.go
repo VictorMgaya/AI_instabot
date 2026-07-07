@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,11 +32,42 @@ type ytVideoMeta struct {
 // ytSourceLoop is the main loop that crawls YouTube Shorts organically by loading
 // the main explore feed (youtube.com/shorts), inspecting the playing Shorts,
 // and downloading/reposting qualifying videos.
+const processedFile = "config/processed_videos.json"
+
+// loadProcessed reads previously processed video IDs from disk.
+func loadProcessed() map[string]bool {
+	m := make(map[string]bool)
+	data, err := os.ReadFile(processedFile)
+	if err != nil {
+		return m
+	}
+	var ids []string
+	if json.Unmarshal(data, &ids) == nil {
+		for _, id := range ids {
+			m[id] = true
+		}
+	}
+	log.Printf("YTSource: Loaded %d previously processed video IDs", len(m))
+	return m
+}
+
+// saveProcessed appends a video ID to the processed list on disk.
+func saveProcessed(videoID string) {
+	var ids []string
+	data, err := os.ReadFile(processedFile)
+	if err == nil {
+		json.Unmarshal(data, &ids)
+	}
+	ids = append(ids, videoID)
+	out, _ := json.Marshal(ids)
+	os.WriteFile(processedFile, out, 0o644)
+}
+
 func (myInstabot MyInstabot) ytSourceLoop() {
 	rand.Seed(time.Now().UnixNano())
 	log.Println("YTSource: Starting organic YouTube Shorts explore crawler...")
 
-	seen := make(map[string]bool)
+	seen := loadProcessed()
 
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
@@ -166,33 +200,61 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 			continue
 		}
 
-		// Generate AI caption
-		caption := generateAIComment(fmt.Sprintf(
-			`You are an energetic tech content creator. Write a short, punchy description (max 30 words) for this tech video repost.
+		// Generate AI description
+		persona := "content creator"
+		if !isPureYtToYt {
+			persona = "tech content creator"
+		}
 
-Video title: %q
+		descPrompt := fmt.Sprintf(
+			`You are an energetic %s. Write a short YouTube description (max 300 chars) for this video repost.
+
+Original title: %q
+Original description: %q
 Creator: %s
 
 Rules:
-- Be informative, exciting and enthusiastic
-- Sound like a passionate tech enthusiast
-- Use 2-4 relevant emojis that match the tech domain (e.g. 🚀 for space, 🤖 for robotics, ⚡ for energy, 🧬 for biotech, 💻 for software)
-- NO hashtags at all — zero, none
+- Describe what this video is ACTUALLY about — reference the specific content
+- Be exciting and enthusiastic
+- Use 2-4 relevant emojis
+- NO hashtags at all
 - Reply with ONLY the description text, nothing else`,
-			meta.Title, meta.Author,
-		))
-		if caption == "" {
-			caption = fmt.Sprintf("Mind-blowing tech content! 🚀🔥 via @%s", meta.Author)
+			persona, meta.Title, truncateStr(meta.Description, 200), meta.Author,
+		)
+		description := generateAIComment(descPrompt)
+		if description == "" {
+			description = fmt.Sprintf("Check this out! 🔥 via @%s", meta.Author)
 		}
 
-		log.Printf("YTSource: Reposting with caption: %q", caption)
+		titlePrompt := fmt.Sprintf(
+			`Write a short YouTube video title (max 80 chars) for this video.
+
+Original title: %q
+
+Rules:
+- Catchy and descriptive
+- Match the actual content
+- Max 80 characters
+- NO emojis, NO hashtags
+- Reply with ONLY the title text, nothing else`,
+			meta.Title,
+		)
+		ytTitle := generateAIComment(titlePrompt)
+		if ytTitle == "" || len(ytTitle) > 100 {
+			ytTitle = meta.Title
+			if len(ytTitle) > 95 {
+				ytTitle = ytTitle[:92] + "..."
+			}
+		}
+
+		log.Printf("YTSource: Repost title=%q desc=%q", ytTitle, description)
 
 		// Post to Instagram
 		if techMode {
 			if !dev {
 				_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
 					File:    bytes.NewReader(videoData),
-					Caption: caption,
+					Caption: description,
 				})
 				if err != nil {
 					log.Printf("YTSource: Instagram upload error: %v", err)
@@ -209,10 +271,12 @@ Rules:
 			localPath := fmt.Sprintf("downloads/yt-source-%s.mp4", videoID)
 			if writeErr := writeVideoFile(localPath, videoData); writeErr == nil {
 				if !dev {
-					if err := uploadToYouTubeShorts(localPath, caption); err != nil {
+					if err := uploadToYouTubeShorts(localPath, ytTitle, description); err != nil {
 						log.Printf("YTSource: YouTube upload error: %v", err)
 					} else {
 						log.Printf("YTSource: Posted to YouTube Shorts ✓")
+						saveProcessed(videoID)
+						seen[videoID] = true
 					}
 				} else {
 					log.Printf("YTSource: [DEV] Would upload to YouTube Shorts: %s", localPath)
@@ -264,7 +328,20 @@ func removeVideoFile(path string) {
 	}
 }
 
-// ytDownloadVideo downloads a YouTube Short video as raw bytes using kkdai/youtube.
+// ffmpegBin returns the path to ffmpeg, checking local dir first then PATH.
+func ffmpegBin() string {
+	if _, err := os.Stat("./ffmpeg"); err == nil {
+		return "./ffmpeg"
+	}
+	if _, err := exec.LookPath("ffmpeg"); err == nil {
+		return "ffmpeg"
+	}
+	return ""
+}
+
+// ytDownloadVideo downloads a YouTube Short video and compresses it for upload.
+// Uses composite download (best video + best audio merged via ffmpeg) then compresses
+// to a reasonable size. Falls back to best muxed stream if ffmpeg is unavailable.
 func ytDownloadVideo(videoID string) ([]byte, error) {
 	client := youtubelib.Client{}
 
@@ -273,23 +350,148 @@ func ytDownloadVideo(videoID string) ([]byte, error) {
 		return nil, fmt.Errorf("GetVideo error: %w", err)
 	}
 
-	// Filter to mp4 formats that contain audio channels (muxed streams)
+	ffmpeg := ffmpegBin()
+
+	// Try composite download first
+	if ffmpeg != "" {
+		data, err := ytDownloadComposite(video, ffmpeg)
+		if err == nil {
+			return ytCompressBytes(data, ffmpeg)
+		}
+		log.Printf("YTSource: Composite failed for %s: %v", videoID, err)
+	}
+
+	// Fall back to muxed stream
+	muxed, err := ytDownloadMuxed(video)
+	if err != nil {
+		return nil, err
+	}
+
+	if ffmpeg != "" {
+		return ytCompressBytes(muxed, ffmpeg)
+	}
+
+	log.Printf("YTSource: ffmpeg not found, using raw muxed stream for %s", videoID)
+	return muxed, nil
+}
+
+// ytCompressBytes re-encodes raw video bytes to a compressed H.264 MP4 via ffmpeg.
+func ytCompressBytes(data []byte, ffmpeg string) ([]byte, error) {
+	tmpDir, err := os.MkdirTemp("", "yt-compress-*")
+	if err != nil {
+		return nil, fmt.Errorf("temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	inPath := filepath.Join(tmpDir, "in.mp4")
+	outPath := filepath.Join(tmpDir, "out.mp4")
+
+	if err := os.WriteFile(inPath, data, 0o644); err != nil {
+		return nil, fmt.Errorf("write input: %w", err)
+	}
+
+	cmd := exec.Command(ffmpeg, "-y", "-i", inPath,
+		"-c:v", "libx264", "-crf", "28", "-preset", "fast",
+		"-c:a", "aac", "-b:a", "128k",
+		"-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease",
+		"-movflags", "+faststart",
+		"-loglevel", "error", outPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("compress failed: %w\n%s", err, out)
+	}
+
+	outData, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("read compressed: %w", err)
+	}
+
+	log.Printf("YTSource: Compressed %dKB -> %dKB", len(data)/1024, len(outData)/1024)
+	return outData, nil
+}
+
+// ytDownloadComposite downloads best video-only + audio-only streams and merges via ffmpeg.
+// Returns raw merged bytes (no compression — caller should compress via ytCompressBytes).
+func ytDownloadComposite(video *youtubelib.Video, ffmpeg string) ([]byte, error) {
+	client := youtubelib.Client{}
+
+	videoFormats := video.Formats.Type("video").AudioChannels(0)
+	audioFormats := video.Formats.Type("audio")
+
+	if len(videoFormats) == 0 || len(audioFormats) == 0 {
+		return nil, fmt.Errorf("no separate video/audio streams for %s", video.ID)
+	}
+
+	videoFormats.Sort()
+	audioFormats.Sort()
+	bestVideo := videoFormats[0]
+	bestAudio := audioFormats[0]
+
+	log.Printf("YTSource: Composite download for %s — video=%s (%dx%d) audio=%s (%dch %dkbps)",
+		video.ID, bestVideo.QualityLabel, bestVideo.Width, bestVideo.Height,
+		bestAudio.MimeType, bestAudio.AudioChannels, bestAudio.Bitrate/1000)
+
+	tmpDir, err := os.MkdirTemp("", "yt-composite-*")
+	if err != nil {
+		return nil, fmt.Errorf("temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	vf := filepath.Join(tmpDir, "video.mp4")
+	af := filepath.Join(tmpDir, "audio.m4a")
+	of := filepath.Join(tmpDir, "output.mp4")
+
+	if err := downloadStream(&client, video, &bestVideo, vf); err != nil {
+		return nil, fmt.Errorf("video stream: %w", err)
+	}
+	if err := downloadStream(&client, video, &bestAudio, af); err != nil {
+		return nil, fmt.Errorf("audio stream: %w", err)
+	}
+
+	cmd := exec.Command(ffmpeg, "-y", "-i", vf, "-i", af,
+		"-c", "copy", "-shortest", "-loglevel", "warning", of)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg merge failed: %w\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(of)
+	if err != nil {
+		return nil, fmt.Errorf("read output: %w", err)
+	}
+	return data, nil
+}
+
+// downloadStream writes a single format stream to a file.
+func downloadStream(client *youtubelib.Client, video *youtubelib.Video, format *youtubelib.Format, path string) error {
+	stream, _, err := client.GetStream(video, format)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, stream)
+	return err
+}
+
+// ytDownloadMuxed falls back to best muxed (combined audio+video) stream.
+func ytDownloadMuxed(video *youtubelib.Video) ([]byte, error) {
+	client := youtubelib.Client{}
+
 	formats := video.Formats.WithAudioChannels().Type("video/mp4")
 	if len(formats) == 0 {
-		// Fallback to any format with audio channels
 		formats = video.Formats.WithAudioChannels()
 	}
 	if len(formats) == 0 {
-		return nil, fmt.Errorf("no muxed audio/video formats available for %s", videoID)
+		return nil, fmt.Errorf("no muxed streams available for %s", video.ID)
 	}
 
-	// Pick the format with the highest resolution (width) for best quality
+	formats.Sort()
 	best := formats[0]
-	for _, f := range formats {
-		if f.Width > best.Width {
-			best = f
-		}
-	}
+
+	log.Printf("YTSource: Muxed download for %s — %s (%dx%d)", video.ID, best.QualityLabel, best.Width, best.Height)
 
 	stream, _, err := client.GetStream(video, &best)
 	if err != nil {

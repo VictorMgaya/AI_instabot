@@ -92,7 +92,6 @@ def main():
             page.goto("https://studio.youtube.com", timeout=60000)
             
             # If Google asks for code/2FA verification, wait for the user to complete it
-            import time
             start_time = time.time()
             challenge_detected = False
             while "accounts.google.com" in page.url:
@@ -148,6 +147,9 @@ def main():
             print("YouTube Uploader: Selecting video file...")
             page.set_input_files('input[type="file"]', args.video)
             
+            print("YouTube Uploader: Waiting for video upload and processing to complete...")
+            page.wait_for_timeout(30000)
+            
             print("YouTube Uploader: Waiting for metadata inputs to load...")
             page.wait_for_selector('#title-textarea #textbox', timeout=60000)
             page.wait_for_timeout(2000)
@@ -167,23 +169,51 @@ def main():
             desc_input.fill(args.description)
             
             print("YouTube Uploader: Setting audience details (Not Made for Kids)...")
-            page.click('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"], paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]', force=True)
-            page.wait_for_timeout(1000)
-            
-            # Navigate Details -> Video Elements
-            print("YouTube Uploader: Navigating Step 1 -> Step 2...")
-            page.click('#next-button', force=True)
+            page.evaluate("""
+                (() => {
+                    var done = false;
+                    var sel = 'tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"], paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"], [name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]';
+                    document.querySelectorAll(sel).forEach(function(r) {
+                        if (!done) { r.click(); done = true; }
+                    });
+                    if (!done) {
+                        document.querySelectorAll('ytkc-radio-button, [role=radio]').forEach(function(r) {
+                            var txt = (r.textContent || '').toLowerCase();
+                            if (!done && (txt.includes('not made for kids') || txt.includes("no, it's not"))) {
+                                r.click(); done = true;
+                            }
+                        });
+                    }
+                    if (!done) console.warn('Could not click Not Made for Kids');
+                })()
+            """)
             page.wait_for_timeout(2000)
             
-            # Navigate Video Elements -> Checks
-            print("YouTube Uploader: Navigating Step 2 -> Step 3...")
-            page.click('#next-button', force=True)
-            page.wait_for_timeout(2000)
-            
-            # Navigate Checks -> Visibility
-            print("YouTube Uploader: Navigating Step 3 -> Step 4...")
-            page.click('#next-button', force=True)
-            page.wait_for_timeout(2000)
+            # Navigate through all upload wizard steps dynamically.
+            # YouTube may hide #next-button on some steps; use JS click as fallback.
+            max_steps = 5
+            for step_idx in range(1, max_steps + 1):
+                # If we're already on the visibility step, stop navigating
+                public_radio = page.locator('tp-yt-paper-radio-button[name="PUBLIC"], paper-radio-button[name="PUBLIC"]')
+                if public_radio.is_visible():
+                    print(f"YouTube Uploader: Already on visibility step (step {step_idx}).")
+                    break
+
+                print(f"YouTube Uploader: Navigating step {step_idx}...")
+                
+                # Try clicking #next-button normally
+                next_btn = page.locator('#next-button')
+                if next_btn.is_visible():
+                    next_btn.click(force=True)
+                elif next_btn.count() > 0:
+                    # Button exists but hidden — click via JavaScript
+                    page.evaluate('document.querySelector("#next-button").click()')
+                else:
+                    # No next button at all; assume we're on the final step
+                    print(f"YouTube Uploader: No next button found on step {step_idx}.")
+                    break
+                    
+                page.wait_for_timeout(3000)
             
             # Select Visibility mode
             if args.dev:
@@ -195,8 +225,16 @@ def main():
                 
             page.wait_for_timeout(1000)
             
+            print("YouTube Uploader: Waiting for done-button to be ready (upload processing)...")
+            page.wait_for_selector('#done-button', state='visible', timeout=180000)
+            page.wait_for_timeout(1000)
+            
             print("YouTube Uploader: Submitting and publishing...")
-            page.click('#done-button', force=True)
+            done_btn = page.locator('#done-button')
+            if done_btn.is_visible():
+                done_btn.click(force=True)
+            else:
+                page.evaluate('document.querySelector("#done-button").click()')
             
             # Wait for upload completion dialog or wait a sufficient block for submission to complete
             page.wait_for_timeout(10000)

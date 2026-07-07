@@ -35,6 +35,13 @@ config/config.json
 # Binaries
 go-instabot
 instabot
+ffmpeg
+
+# Python cache
+__pycache__/
+
+# Processed video tracker
+config/processed_videos.json
 
 # Screenshots
 *.png

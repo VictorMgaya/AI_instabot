@@ -298,7 +298,11 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 	}
 
 	if youtubeMode && localPath != "" {
-		err := uploadToYouTubeShorts(localPath, caption)
+		ytTitle := caption
+		if len(ytTitle) > 95 {
+			ytTitle = ytTitle[:92] + "..."
+		}
+		err := uploadToYouTubeShorts(localPath, ytTitle, caption)
 		if err != nil {
 			log.Printf("TechRepost: YouTube upload error: %v", err)
 		}
