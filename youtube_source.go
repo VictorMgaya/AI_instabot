@@ -273,16 +273,20 @@ func ytDownloadVideo(videoID string) ([]byte, error) {
 		return nil, fmt.Errorf("GetVideo error: %w", err)
 	}
 
-	formats := video.Formats.Type("video/mp4")
+	// Filter to mp4 formats that contain audio channels (muxed streams)
+	formats := video.Formats.WithAudioChannels().Type("video/mp4")
 	if len(formats) == 0 {
-		return nil, fmt.Errorf("no mp4 formats available for %s", videoID)
+		// Fallback to any format with audio channels
+		formats = video.Formats.WithAudioChannels()
+	}
+	if len(formats) == 0 {
+		return nil, fmt.Errorf("no muxed audio/video formats available for %s", videoID)
 	}
 
-	// Pick stream matching vertical format
+	// Pick the format with the highest resolution (width) for best quality
 	best := formats[0]
 	for _, f := range formats {
-		if f.Width > 0 && f.Width <= 720 && f.ContentLength > 0 &&
-			f.ContentLength < best.ContentLength {
+		if f.Width > best.Width {
 			best = f
 		}
 	}
