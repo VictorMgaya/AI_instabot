@@ -149,7 +149,7 @@ func (myInstabot MyInstabot) syncFollowers() {
 		if !dev {
 			user.Unfollow()
 		}
-		time.Sleep(6 * time.Second)
+		randDelay(60, 150) // was 6 s — slower unfollow cadence
 	}
 }
 
@@ -163,13 +163,20 @@ func (myInstabot MyInstabot) followUser(user *goinsta.User) {
 		}
 		log.Println("Followed")
 		numFollowed++
+		incrementDailyCounter("follow")
 		report[line{"explore", "follow"}]++
 	} else {
 		log.Println("Already following " + user.Username)
 	}
 }
 
+func randDelay(min, max int) {
+	d := min + rand.Intn(max-min+1)
+	time.Sleep(time.Duration(d) * time.Second)
+}
+
 func (myInstabot MyInstabot) loopRandom() {
+	rand.Seed(time.Now().UnixNano())
 	for tagName := range tagsList {
 		limitsConf := viper.GetStringMap("tags." + tagName)
 		limits = map[string]int{
@@ -180,12 +187,20 @@ func (myInstabot MyInstabot) loopRandom() {
 		break
 	}
 
+	loadOrCreateDailyCounters()
+
 	for {
+		// Sleep during nighttime hours to mimic a real user
+		checkSleepAndSleep()
+
 		numFollowed = 0
 		numLiked = 0
 		numCommented = 0
 		log.Println("Fetching random content from explore...")
 		myInstabot.browseExplore()
+
+		// Long between-cycle wait (20–45 min by default)
+		randDelay(cycleDelayMin, cycleDelayMax)
 	}
 }
 
@@ -198,6 +213,7 @@ func (myInstabot MyInstabot) likeImage(image goinsta.Item) {
 		}
 		log.Println("Liked")
 		numLiked++
+		incrementDailyCounter("like")
 		report[line{"explore", "like"}]++
 	} else {
 		log.Println("Image already liked")
@@ -282,46 +298,62 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 	checkedUser[userInfo.Username] = true
 	log.Printf("Checking %s — %d followers\n", userInfo.Username, followerCount)
 
-	like := numLiked < limits["like"]
-	follow := numFollowed < limits["follow"]
-	comment := numCommented < limits["comment"]
+	// Apply follower limits and privacy checks to be choosy
+	canEngage := !userInfo.IsPrivate || userInfo.Friendship.Following
 
-	skip := false
-	following := myInstabot.Insta.Account.Following("", goinsta.DefaultOrder)
-	var followingUsers []goinsta.User
-	for following.Next() {
-		for _, user := range following.Users {
-			followingUsers = append(followingUsers, *user)
-		}
-	}
-	for _, user := range followingUsers {
-		if user.Username == userInfo.Username {
-			skip = true
-			break
-		}
+	like := numLiked < limits["like"] && followerCount >= likeLowerLimit && followerCount <= likeUpperLimit && canEngage
+	follow := numFollowed < limits["follow"] && followerCount >= followLowerLimit && followerCount <= followUpperLimit
+	comment := numCommented < limits["comment"] && followerCount >= commentLowerLimit && followerCount <= commentUpperLimit && canEngage
+
+	// Check if already following or requested
+	alreadyFollowing := userInfo.Friendship.Following || userInfo.Friendship.OutgoingRequest
+
+	if alreadyFollowing {
+		log.Printf("Already following or requested %s, skipping further follow attempts\n", userInfo.Username)
+		follow = false
 	}
 
-	if !skip {
-		if like {
-			myInstabot.likeImage(image)
-			if follow && !containsString(userBlacklist, userInfo.Username) {
-				myInstabot.followUser(userInfo)
-			}
-		}
-		if comment {
-			myInstabot.commentImage(image, userInfo)
-		}
+	// Enforce daily caps on top of per-session limits
+	if like && dailyLimitReached("like") {
+		like = false
+	}
+	if follow && dailyLimitReached("follow") {
+		follow = false
+	}
+	if comment && dailyLimitReached("comment") {
+		comment = false
+	}
+
+	if like {
+		myInstabot.likeImage(image)
+		randDelay(30, 75) // was 6–15 s
+	} else if numLiked < limits["like"] {
+		log.Printf("Skipping like for %s (followers: %d, range: [%d, %d], private: %t)\n", userInfo.Username, followerCount, likeLowerLimit, likeUpperLimit, userInfo.IsPrivate)
+	}
+
+	if follow && !containsString(userBlacklist, userInfo.Username) {
+		randDelay(45, 90)  // was 10–25 s
+		myInstabot.followUser(userInfo)
+		randDelay(60, 120) // was 12–30 s
+	} else if numFollowed < limits["follow"] && !alreadyFollowing {
+		log.Printf("Skipping follow for %s (followers: %d, range: [%d, %d])\n", userInfo.Username, followerCount, followLowerLimit, followUpperLimit)
+	}
+
+	if comment {
+		myInstabot.commentImage(image, userInfo)
+		randDelay(45, 120) // was 10–25 s
+	} else if numCommented < limits["comment"] {
+		log.Printf("Skipping comment for %s (followers: %d, range: [%d, %d], private: %t)\n", userInfo.Username, followerCount, commentLowerLimit, commentUpperLimit, userInfo.IsPrivate)
 	}
 
 	log.Printf("%s done\n\n", userInfo.Username)
-	time.Sleep(20 * time.Second)
+	randDelay(60, 180) // was 25–55 s — long pause between users
 }
 
 // Comments an image
 func (myInstabot MyInstabot) commentImage(image goinsta.Item, userInfo *goinsta.User) {
 	text := myInstabot.generateAISuggestion(image, userInfo)
 	if text == "" && len(commentsList) > 0 {
-		rand.Seed(time.Now().UnixNano())
 		text = commentsList[rand.Intn(len(commentsList))]
 	}
 	if text == "" {
@@ -349,6 +381,7 @@ func (myInstabot MyInstabot) commentImage(image goinsta.Item, userInfo *goinsta.
 	}
 	log.Println("Commented " + text)
 	numCommented++
+	incrementDailyCounter("comment")
 	report[line{"explore", "comment"}]++
 }
 

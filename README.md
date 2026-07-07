@@ -23,6 +23,8 @@ You scroll. You like. You follow. You hope.
 
 **AI_Instabot doesn't hope.** It roams Instagram's Explore page — no hashtags, no bias, just real content from real accounts. Every comment is written by AI through OpenRouter, contextual to the post it's responding to.
 
+It also hunts for genuinely technical videos across **all of tech** — software, space, EVs, robotics, biotech, energy, quantum physics — downloads them, rewrites the caption with AI, and reposts them automatically.
+
 One binary. One config. Set it and forget it.
 
 ---
@@ -32,17 +34,18 @@ One binary. One config. Set it and forget it.
 | Action | How |
 |--------|------|
 | ❤️ **Like** | Likes posts from the Explore feed |
-| 👣 **Follow** | Follows users whose content appears |
-| 💬 **AI Comment** | Every user gets an AI-generated comment based on their post caption |
+| 👣 **Follow** | Follows users whose content appears on Explore |
+| 💬 **AI Comment** | Every user gets a contextual AI-generated comment |
+| 📹 **Tech Repost** | Finds, downloads & reposts tech videos with AI captions |
 | 👋 **Unfollow** | Unfollows non-reciprocal followers (`-sync`) |
 
-No hashtag lists. No keyword hunting. Just random, fresh explore content every single run.
+No hashtag lists. No keyword hunting. Just random, fresh explore content every cycle.
 
 ---
 
-## 🧠 AI Comments
+## 🧠 AI Comments & Captions
 
-This is the core. When the bot encounters a user, it sends the post caption + user info to **OpenRouter** (`auto` model) and gets back a short, genuine-sounding comment. No more "nice pic" spam.
+When the bot encounters a user it sends the post caption + profile info to **OpenRouter** (`auto` model) and gets back a short, genuine-sounding comment. Same for tech reposts — the AI rewrites the caption in a fresh, informative way.
 
 **Requires:** `openrouter.api_key` in `config/config.json` (or `OPENROUTER_API_KEY` env var).
 
@@ -68,12 +71,21 @@ vim config/config.json
 
 ```
   -run          Like, follow, and AI-comment on random explore content
+  -tech         Hunt for tech videos and repost them with AI captions
   -sync         Unfollow users who don't follow back
   -dev          Dry-run (no real API mutations)
-  -logs         Write logs to a file
-  -nomail       Disable email report
+  -logs         Write logs to a timestamped log file
+  -nomail       Disable email report on exit
   -noduplicate  Skip already-processed users this session
   -h            Help
+```
+
+Modes can be combined:
+
+```bash
+./instabot -run -tech        # engagement + tech repost simultaneously
+./instabot -run -tech -dev   # full dry-run, nothing posted
+./instabot -sync             # unfollow non-followers only
 ```
 
 ---
@@ -92,11 +104,24 @@ vim config/config.json
     }
   },
   "limits": {
-    "like":    { "min": 0, "max": 10000 },
-    "follow":  { "min": 200, "max": 10000 }
+    "like":    { "min": 0,   "max": 10000 },
+    "follow":  { "min": 200, "max": 10000 },
+    "comment": { "min": 100, "max": 10000 }
   },
   "tags": {
-    "session": { "like": 10, "follow": 5, "comment": 15 }
+    "session": { "like": 10, "follow": 5, "comment": 5 }
+  },
+  "tech": {
+    "reposts": 5
+  },
+  "safety": {
+    "daily_instagram_follow":  60,
+    "daily_instagram_like":    100,
+    "daily_instagram_comment": 15,
+    "sleep_start_hour": 22,
+    "sleep_end_hour":   7,
+    "cycle_delay_min":  1200,
+    "cycle_delay_max":  2700
   },
   "blacklist": [],
   "whitelist": []
@@ -117,72 +142,60 @@ vim config/config.json
 ```
 </details>
 
-The `tags.session` values set per-run caps:
-- `like` — max likes this session
-- `follow` — max follows this session
-- `comment` — max AI comments this session
+### Key config fields
+
+| Field | Purpose |
+|-------|---------|
+| `tags.<name>.like/follow/comment` | Per-cycle action caps for the engagement loop |
+| `tech.reposts` | Max tech videos to repost per cycle |
+| `safety.daily_instagram_*` | Hard daily caps — counters survive restarts |
+| `safety.sleep_start/end_hour` | Bot sleeps during these local hours (night mode) |
+| `safety.cycle_delay_min/max` | Seconds to wait between browse cycles |
 
 ---
 
-## 🧠 How It Works
+## 🔬 Tech Repost — What Counts as "Tech"?
 
-```
-         ┌──────────────┐
-         │  config.json  │
-         └──────┬───────┘
-                │
-         ┌──────▼───────┐
-         │  Explore     │
-         │  (Refresh)   │  ← fresh page every run
-         └──────┬───────┘
-                │
-         ┌──────▼───────┐
-         │  Extract     │
-         │  media items │
-         └──────┬───────┘
-                │
-         ┌──────▼───────┐
-         │  For each:   │
-         │  ┌─────────┐ │
-         │  │ Fetch   │ │
-         │  │ profile │ │
-         │  └────┬────┘ │
-         │       │      │
-         │  ┌────▼────┐ │
-         │  │ Like ✅ │ │
-         │  │Follow ✅│ │
-         │  │AI Cmnt✅│ │  ← OpenRouter generates it
-         │  └─────────┘ │
-         │       │      │
-         │   ⏱️ 20s    │
-         └──────┬───────┘
-                │
-         ┌──────▼───────┐
-         │  Caps met?   │
-         │  ──► loop    │
-         │  ──► refresh │
-         └──────────────┘
-```
+The bot uses a **weighted keyword scoring system** across two tiers. A video must score **≥ 3** from its caption alone (or ≥ 4 combined with the creator's bio) to qualify — preventing generic posts from slipping through.
+
+| Domain | Examples |
+|--------|---------|
+| 🖥 Software / AI | `pytorch`, `kubernetes`, `llm`, `graphql`, `compiler` |
+| 🤖 Robotics | `humanoid robot`, `exoskeleton`, `swarm robotics`, `slam` |
+| 🚀 Space & Aerospace | `spacex`, `starship`, `orbital mechanics`, `james webb` |
+| 🚗 Automotive / EVs | `solid state battery`, `adas`, `can bus`, `autonomous driving` |
+| ✈️ Aviation / Drones | `vtol`, `pixhawk`, `turbofan`, `scramjet`, `avionics` |
+| ⚡ Energy | `tokamak`, `photovoltaic`, `perovskite solar`, `supercapacitor` |
+| ⚛️ Quantum / Physics | `qubit`, `qiskit`, `cern`, `gravitational wave` |
+| 🧬 Biotech / MedTech | `crispr`, `alphafold`, `neuralink`, `microfluidics` |
+| 🔬 Semiconductors | `lithography`, `mosfet`, `risc-v`, `oscilloscope` |
+| 🧪 Materials science | `graphene`, `superconductor`, `carbon nanotube`, `additive manufacturing` |
 
 ---
 
-## 🔒 Safety
+## 🛡️ Safety System
 
-| Feature | Why |
-|---------|-----|
-| ⏱️ **20s delay** | Looks human, avoids rate limits |
-| 🔐 **Encrypted session** | Login once, no repeated 2FA |
-| 📉 **Follower thresholds** | Avoid bot/scam accounts |
-| 🔄 **Retry with backoff** | Handles API hiccups gracefully |
-| ♻️ **Fresh explore page** | Never repeats content |
+The bot is designed to stay under Instagram's radar by mimicking real human behaviour.
+
+| Feature | Detail |
+|---------|---------|
+| 🌙 **Night sleep mode** | Sleeps between `sleep_start_hour` and `sleep_end_hour` + random 10–30 min jitter |
+| 📅 **Daily hard caps** | Persisted to `config/action_counters.json` — reset at midnight, survive restarts |
+| ⏱️ **Human-scale delays** | 30–75 s after likes · 45–90 s before follow · 60–120 s after follow · 60–180 s between items |
+| 🔄 **Long cycle gaps** | 20–45 minutes between explore crawls (configurable) |
+| 🐢 **Slow unfollow** | 60–150 s random delay between each unfollow |
+| 🔐 **Session persistence** | Login once, session saved to `goinsta-session` |
+| 📉 **Follower thresholds** | Configurable min/max follower count for each action |
+| 🔁 **Retry with backoff** | Exponential backoff on API errors |
 
 ---
 
 ## 🏗️ Tech Stack
 
-- **Go 1.26+** — single static binary
-- **goinsta/v3** — unofficial Instagram API (vendored)
-- **OpenRouter** — AI comment generation (model: `auto`)
+- **Go 1.26+** — single static binary, zero dependencies at runtime
+- **goinsta/v3** — unofficial Instagram API (vendored under `lib/`)
+- **OpenRouter** — AI comment & caption generation (model: `auto`)
+- **chromedp** — headless Chrome for TikTok interactions
 - **Viper** — config management
 - **net/smtp** — email reports
 

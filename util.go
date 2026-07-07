@@ -1,13 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/smtp"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -26,11 +29,28 @@ var (
 	// Acut
 	run bool
 
+	// Whether we want to run TikTok alongside Instagram
+	tiktokMode bool
+
+	// Whether we want to run tech video repost mode
+	techMode bool
+
 	// Whether we want to have logging
 	logs bool
 
 	// Used to skip following, liking and commenting same user in this session
 	noduplicate bool
+)
+
+// Safety limits
+var (
+	dailyInstagramFollowLimit  int
+	dailyInstagramLikeLimit    int
+	dailyInstagramCommentLimit int
+	sleepStartHour             int
+	sleepEndHour               int
+	cycleDelayMin              int
+	cycleDelayMax              int
 )
 
 // An image will be liked if the poster has more followers than likeLowerLimit, and less than likeUpperLimit
@@ -82,6 +102,8 @@ func check(err error) {
 // Parses the options given to the script
 func parseOptions() {
 	flag.BoolVar(&run, "run", false, "Use this option to follow, like and comment")
+	flag.BoolVar(&tiktokMode, "tiktok", false, "Use this option to also run TikTok bot (combine with -run for both)")
+	flag.BoolVar(&techMode, "tech", false, "Use this option to download and repost tech videos with AI descriptions")
 	flag.BoolVar(&unfollow, "sync", false, "Use this option to unfollow those who are not following back")
 	flag.BoolVar(&nomail, "nomail", false, "Use this option to disable the email notifications")
 	flag.BoolVar(&dev, "dev", false, "Use this option to use the script in development mode : nothing will be done for real")
@@ -134,6 +156,25 @@ func getConfig() {
 
 	commentLowerLimit = viper.GetInt("limits.comment.min")
 	commentUpperLimit = viper.GetInt("limits.comment.max")
+
+	dailyInstagramFollowLimit = viper.GetInt("safety.daily_instagram_follow")
+	dailyInstagramLikeLimit = viper.GetInt("safety.daily_instagram_like")
+	dailyInstagramCommentLimit = viper.GetInt("safety.daily_instagram_comment")
+	sleepStartHour = viper.GetInt("safety.sleep_start_hour")
+	sleepEndHour = viper.GetInt("safety.sleep_end_hour")
+	cycleDelayMin = viper.GetInt("safety.cycle_delay_min")
+	cycleDelayMax = viper.GetInt("safety.cycle_delay_max")
+
+	// Set sensible defaults if not set
+	if dailyInstagramFollowLimit == 0 { dailyInstagramFollowLimit = 60 }
+	if dailyInstagramLikeLimit == 0 { dailyInstagramLikeLimit = 100 }
+	if dailyInstagramCommentLimit == 0 { dailyInstagramCommentLimit = 15 }
+	if sleepStartHour == 0 && sleepEndHour == 0 {
+		sleepStartHour = 22
+		sleepEndHour = 7
+	}
+	if cycleDelayMin == 0 { cycleDelayMin = 1200 }
+	if cycleDelayMax == 0 { cycleDelayMax = 2700 }
 
 	tagsList = viper.GetStringMap("tags")
 
@@ -214,4 +255,155 @@ func buildReport() {
 
 	fmt.Println(reportAsString)
 	send(reportAsString, true)
+}
+
+// ---------------------------------------------------------------------------
+// Daily action counters — persisted to config/action_counters.json so limits
+// survive restarts within the same calendar day.
+// ---------------------------------------------------------------------------
+
+const actionCountersFile = "config/action_counters.json"
+
+// DailyCounters tracks how many Instagram actions have been taken today.
+type DailyCounters struct {
+	Date             string `json:"date"`
+	InstagramFollows int    `json:"instagram_follows"`
+	InstagramLikes   int    `json:"instagram_likes"`
+	InstagramComments int   `json:"instagram_comments"`
+}
+
+var (
+	dailyCounters    DailyCounters
+	dailyCountersMu  sync.Mutex
+)
+
+// todayDate returns today's date string (YYYY-MM-DD).
+func todayDate() string {
+	return time.Now().Format("2006-01-02")
+}
+
+// loadOrCreateDailyCounters reads the persisted counters from disk.
+// If the stored date differs from today the counters are reset.
+func loadOrCreateDailyCounters() {
+	dailyCountersMu.Lock()
+	defer dailyCountersMu.Unlock()
+
+	data, err := os.ReadFile(actionCountersFile)
+	if err == nil {
+		var stored DailyCounters
+		if json.Unmarshal(data, &stored) == nil {
+			if stored.Date == todayDate() {
+				dailyCounters = stored
+				log.Printf("[Safety] Loaded daily counters: follows=%d likes=%d comments=%d",
+					dailyCounters.InstagramFollows,
+					dailyCounters.InstagramLikes,
+					dailyCounters.InstagramComments)
+				return
+			}
+		}
+	}
+	// New day — reset counters
+	dailyCounters = DailyCounters{Date: todayDate()}
+	log.Println("[Safety] New day — daily counters reset.")
+	saveDailyCounters()
+}
+
+// saveDailyCounters writes the current counters to disk (must be called with lock held).
+func saveDailyCounters() {
+	data, err := json.MarshalIndent(dailyCounters, "", "  ")
+	if err != nil {
+		log.Printf("[Safety] Failed to marshal counters: %v", err)
+		return
+	}
+	if err := os.WriteFile(actionCountersFile, data, 0644); err != nil {
+		log.Printf("[Safety] Failed to save counters: %v", err)
+	}
+}
+
+// incrementDailyCounter increments the named counter and persists it.
+// Valid actions: "follow", "like", "comment".
+func incrementDailyCounter(action string) {
+	dailyCountersMu.Lock()
+	defer dailyCountersMu.Unlock()
+
+	// Roll over if the date has changed mid-run
+	if dailyCounters.Date != todayDate() {
+		dailyCounters = DailyCounters{Date: todayDate()}
+		log.Println("[Safety] Midnight rollover — daily counters reset.")
+	}
+
+	switch action {
+	case "follow":
+		dailyCounters.InstagramFollows++
+	case "like":
+		dailyCounters.InstagramLikes++
+	case "comment":
+		dailyCounters.InstagramComments++
+	}
+	saveDailyCounters()
+}
+
+// dailyLimitReached returns true when the given action has hit its daily cap.
+func dailyLimitReached(action string) bool {
+	dailyCountersMu.Lock()
+	defer dailyCountersMu.Unlock()
+
+	switch action {
+	case "follow":
+		if dailyInstagramFollowLimit > 0 && dailyCounters.InstagramFollows >= dailyInstagramFollowLimit {
+			log.Printf("[Safety] Daily follow limit reached (%d/%d)", dailyCounters.InstagramFollows, dailyInstagramFollowLimit)
+			return true
+		}
+	case "like":
+		if dailyInstagramLikeLimit > 0 && dailyCounters.InstagramLikes >= dailyInstagramLikeLimit {
+			log.Printf("[Safety] Daily like limit reached (%d/%d)", dailyCounters.InstagramLikes, dailyInstagramLikeLimit)
+			return true
+		}
+	case "comment":
+		if dailyInstagramCommentLimit > 0 && dailyCounters.InstagramComments >= dailyInstagramCommentLimit {
+			log.Printf("[Safety] Daily comment limit reached (%d/%d)", dailyCounters.InstagramComments, dailyInstagramCommentLimit)
+			return true
+		}
+	}
+	return false
+}
+
+// checkSleepAndSleep puts the bot to sleep if the current local hour falls
+// within the configured nighttime window (sleepStartHour – sleepEndHour).
+// It sleeps until the wake hour plus a random jitter of 10-30 minutes.
+func checkSleepAndSleep() {
+	now := time.Now()
+	h := now.Hour()
+
+	sleeping := false
+	if sleepStartHour < sleepEndHour {
+		// e.g. 23:00 – 07:00 wraps midnight, handled below
+		sleeping = h >= sleepStartHour || h < sleepEndHour
+	} else {
+		sleeping = h >= sleepStartHour && h < sleepEndHour
+	}
+
+	// Default: sleep between 22:00 and 07:00 if hours wrap midnight
+	if sleepStartHour > sleepEndHour {
+		sleeping = h >= sleepStartHour || h < sleepEndHour
+	}
+
+	if !sleeping {
+		return
+	}
+
+	// Calculate wake time: next occurrence of sleepEndHour
+	wakeBase := time.Date(now.Year(), now.Month(), now.Day(), sleepEndHour, 0, 0, 0, now.Location())
+	if !wakeBase.After(now) {
+		wakeBase = wakeBase.Add(24 * time.Hour)
+	}
+	// Add random human jitter: 10–30 minutes
+	jitter := time.Duration(10+rand.Intn(21)) * time.Minute
+	wakeTime := wakeBase.Add(jitter)
+
+	sleepDuration := time.Until(wakeTime)
+	log.Printf("[Safety] 🌙 Night sleep mode — sleeping until ~%s (%s)",
+		wakeTime.Format("15:04"), sleepDuration.Round(time.Minute))
+	time.Sleep(sleepDuration)
+	log.Println("[Safety] ☀️ Woke up — resuming bot.")
 }
