@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/Davincible/goinsta/v3"
-	"github.com/spf13/viper"
 )
 
 var processedTechIDs = make(map[string]bool)
@@ -136,20 +135,27 @@ var techKeywordsMed = []string{
 	"3d printing", "pcb", "soldering", "microcontroller",
 }
 
-// isTechRelated uses a weighted scoring system.
-// Caption is scored first; if it scores >= 3 the item qualifies.
-// Bio is then scored; if caption + bio >= 4 it qualifies.
-// Generic vague words alone cannot trigger a repost.
+// isTechRelated uses a strict weighted scoring system.
+// Requires a high score to avoid posting borderline content.
+//
+//   Caption alone >= 5  → qualifies  (needs 2+ strong signals)
+//   Caption + bio >= 7  → qualifies  (strong combined signal)
+//
+// A single vague keyword never qualifies on its own.
 func isTechRelated(item *goinsta.Item) bool {
 	caption := strings.ToLower(item.Caption.Text)
 	bio := strings.ToLower(item.User.Biography)
 
-	score := scoreTech(caption)
-	if score >= 3 {
+	// Must have a real caption — no caption = skip
+	if len(strings.TrimSpace(item.Caption.Text)) < 20 {
+		return false
+	}
+
+	captionScore := scoreTech(caption)
+	if captionScore >= 5 {
 		return true
 	}
-	score += scoreTech(bio)
-	return score >= 4
+	return captionScore+scoreTech(bio) >= 7
 }
 
 // scoreTech returns a weighted tech score for a block of text.
@@ -174,38 +180,26 @@ func scoreTech(text string) int {
 
 func (myInstabot MyInstabot) techExploreLoop() {
 	rand.Seed(time.Now().UnixNano())
-
-	techConfig := viper.GetStringMap("tech")
-	maxReposts := 5
-	if v, ok := techConfig["reposts"].(float64); ok {
-		maxReposts = int(v)
-	}
-
 	os.MkdirAll("downloads", 0o755)
 
 	for {
-		techRepostCount = 0
-		log.Println("TechRepost: Browsing explore page for tech videos...")
-
-		myInstabot.techBrowseExplore(maxReposts)
-
-		log.Printf("TechRepost: Cycle done — %d reposts. Starting next scan...", techRepostCount)
+		log.Println("TechRepost: Scanning explore for qualifying tech videos...")
+		myInstabot.techBrowseExplore()
 	}
 }
 
-func (myInstabot MyInstabot) techBrowseExplore(maxReposts int) {
+func (myInstabot MyInstabot) techBrowseExplore() {
 	myInstabot.Insta.Discover.Items = nil
 	myInstabot.Insta.Discover.SectionalItems = nil
 
-	if err := retry(3, 30*time.Second, func() error {
+	if err := retry(3, 10*time.Second, func() error {
 		if myInstabot.Insta.Discover.Refresh() {
 			return nil
 		}
 		if err := myInstabot.Insta.Discover.Error(); err != nil {
-			// Instagram rate-limited us — back off for 15 minutes
 			if strings.Contains(err.Error(), "feedback_required") {
-				log.Printf("TechRepost: Rate-limited by Instagram, cooling down for 15 minutes...")
-				time.Sleep(15 * time.Minute)
+				log.Printf("TechRepost: Rate-limited, backing off 60s...")
+				time.Sleep(60 * time.Second)
 			}
 			return err
 		}
@@ -216,20 +210,14 @@ func (myInstabot MyInstabot) techBrowseExplore(maxReposts int) {
 	}
 
 	for _, section := range myInstabot.Insta.Discover.Items {
-		if techRepostCount >= maxReposts {
-			break
-		}
-		myInstabot.techProcessSection(section, maxReposts)
+		myInstabot.techProcessSection(section)
 	}
 }
 
-func (myInstabot MyInstabot) techProcessSection(section goinsta.DiscoverSectionalItem, maxReposts int) {
+func (myInstabot MyInstabot) techProcessSection(section goinsta.DiscoverSectionalItem) {
 	items := extractExploreItems(section)
 	for _, item := range items {
-		if techRepostCount >= maxReposts {
-			break
-		}
-		if item.MediaType != 2 {
+		if item.MediaType != 2 { // videos only
 			continue
 		}
 
@@ -239,13 +227,26 @@ func (myInstabot MyInstabot) techProcessSection(section goinsta.DiscoverSectiona
 		}
 		processedTechIDs[pk] = true
 
+		score := scoreTech(strings.ToLower(item.Caption.Text)) +
+			scoreTech(strings.ToLower(item.User.Biography))
+		log.Printf("TechRepost: @%s score=%d caption=%q",
+			item.User.Username, score, truncateStr(item.Caption.Text, 80))
+
 		if !isTechRelated(&item) {
+			log.Printf("TechRepost: Skipping @%s — score too low", item.User.Username)
 			continue
 		}
 
 		myInstabot.downloadAndRepost(&item)
-		randDelay(30, 60)
 	}
+}
+
+// truncateStr trims a string for log display.
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
