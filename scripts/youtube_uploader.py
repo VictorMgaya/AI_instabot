@@ -152,11 +152,14 @@ def main():
             page.wait_for_selector('#title-textarea #textbox', timeout=60000)
             page.wait_for_timeout(2000)
             
-            print("YouTube Uploader: Entering title and description...")
-            # Set Title
+            # Set Title (YouTube strictly limits titles to 100 characters; truncate to 95 for safety)
+            clean_title = args.title
+            if len(clean_title) > 95:
+                clean_title = clean_title[:92] + "..."
+
             title_input = page.locator('#title-textarea #textbox')
             title_input.clear()
-            title_input.fill(args.title)
+            title_input.fill(clean_title)
             
             # Set Description
             desc_input = page.locator('#description-textarea #textbox')
