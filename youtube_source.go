@@ -17,17 +17,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// ytHashtags are the tags explored to find tech Shorts on YouTube.
-// They cover the same wide domains as the Instagram keyword scoring system.
-var ytHashtags = []string{
-	"tech", "technology", "programming", "coding", "software",
-	"space", "spacex", "nasa", "robotics", "engineering",
-	"developer", "science", "electronics", "3dprinting",
-	"futuretech", "computerscience", "hacker", "cybersecurity",
-	"gadgets", "automation", "techworld", "quantumphysics",
-}
-
-// ytVideoMeta holds scraped metadata for a YouTube Short.
+// ytVideoMeta holds scraped metadata for the active YouTube Short.
 type ytVideoMeta struct {
 	URL         string
 	VideoID     string
@@ -36,62 +26,147 @@ type ytVideoMeta struct {
 	Author      string
 }
 
-// ytSourceLoop is the goroutine that continuously crawls YouTube Shorts,
-// filters them by tech relevance, downloads qualifying videos, and passes
-// them into the repost pipeline. It runs in parallel with the IG Explore loop.
+// ytSourceLoop is the main loop that crawls YouTube Shorts organically by loading
+// the main explore feed (youtube.com/shorts), inspecting the playing Shorts,
+// and downloading/reposting qualifying videos.
 func (myInstabot MyInstabot) ytSourceLoop() {
 	rand.Seed(time.Now().UnixNano())
-	log.Println("YTSource: YouTube Shorts crawler started")
+	log.Println("YTSource: Starting organic YouTube Shorts explore crawler...")
 
 	seen := make(map[string]bool)
 
-	for {
-		tag := ytHashtags[rand.Intn(len(ytHashtags))]
-		log.Printf("YTSource: Exploring hashtag feed #%s ...", tag)
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(),
+		append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("disable-gpu", true),
+			chromedp.Flag("no-sandbox", true),
+			chromedp.Flag("headless", true),
+			chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		)...,
+	)
+	defer cancel()
 
-		urls, err := ytBrowseShorts(tag)
+	ctx, ctxCancel := chromedp.NewContext(allocCtx)
+	defer ctxCancel()
+
+	// Initial load of the main Shorts feed
+	log.Println("YTSource: Loading Shorts explore feed...")
+	err := chromedp.Run(ctx,
+		chromedp.Navigate("https://www.youtube.com/shorts"),
+		chromedp.Sleep(8*time.Second),
+	)
+	if err != nil {
+		log.Fatalf("YTSource: Failed to load Shorts explore feed: %v", err)
+	}
+
+	for {
+		var currentURL string
+		err := chromedp.Run(ctx, chromedp.Location(&currentURL))
 		if err != nil {
-			log.Printf("YTSource: Browse error: %v — retrying in 30s", err)
-			time.Sleep(30 * time.Second)
+			log.Printf("YTSource: Error getting current location: %v — reloading feed", err)
+			_ = chromedp.Run(ctx, chromedp.Navigate("https://www.youtube.com/shorts"), chromedp.Sleep(8*time.Second))
 			continue
 		}
 
-		log.Printf("YTSource: Found %d Short(s) for #%s", len(urls), tag)
+		// URL format is https://www.youtube.com/shorts/VideoID
+		parts := strings.Split(currentURL, "/shorts/")
+		if len(parts) < 2 {
+			log.Printf("YTSource: Not on a Shorts page (%s), skipping to next...", currentURL)
+			nextShort(ctx)
+			time.Sleep(3*time.Second)
+			continue
+		}
 
-		for _, url := range urls {
-			if seen[url] {
-				continue
-			}
-			seen[url] = true
+		videoID := parts[1]
+		if idx := strings.Index(videoID, "?"); idx != -1 {
+			videoID = videoID[:idx]
+		}
 
-			meta, err := ytGetShortDetails(url)
-			if err != nil {
-				log.Printf("YTSource: Metadata error for %s: %v", url, err)
-				continue
-			}
+		if seen[videoID] {
+			// Already inspected this Short, scroll to the next one
+			nextShort(ctx)
+			time.Sleep(4*time.Second)
+			continue
+		}
+		seen[videoID] = true
 
-			// Score against our keyword system
-			score := scoreTech(strings.ToLower(meta.Title)) +
-				scoreTech(strings.ToLower(meta.Description))
-			log.Printf("YTSource: @%s score=%d title=%q",
-				meta.Author, score, truncateStr(meta.Title, 80))
+		// Scrape details from the active video player
+		var meta *ytVideoMeta
+		var detailsRaw map[string]string
+		err = chromedp.Run(ctx,
+			chromedp.Evaluate(`
+				(function() {
+					var activeReel = document.querySelector('ytd-reel-video-renderer[is-active]') || 
+					                 document.querySelector('ytd-reel-video-renderer[active]') ||
+					                 document.querySelector('ytd-reel-video-renderer');
+					if (!activeReel) return null;
+					
+					var titleEl = activeReel.querySelector('h2.title') || 
+					              activeReel.querySelector('.title') || 
+					              activeReel.querySelector('h2');
+					var title = titleEl ? titleEl.innerText : "";
+					
+					var channelEl = activeReel.querySelector('ytd-channel-name a') || 
+					                activeReel.querySelector('#channel-name a') || 
+					                activeReel.querySelector('.channel-name') ||
+					                activeReel.querySelector('[id="text"] a');
+					var channel = channelEl ? channelEl.innerText : "";
+					
+					var descEl = activeReel.querySelector('#description') || 
+					             activeReel.querySelector('.description');
+					var desc = descEl ? descEl.innerText : "";
+					
+					return {
+						"title": title,
+						"channel": channel,
+						"description": desc
+					};
+				})()
+			`, &detailsRaw),
+		)
 
-			// Must meet the same strict threshold as IG Explore
-			if score < 5 {
-				log.Printf("YTSource: Skipping %s — score too low (%d)", meta.VideoID, score)
-				continue
-			}
+		if err != nil || detailsRaw == nil {
+			log.Printf("YTSource: Could not parse details for Short %s", videoID)
+			nextShort(ctx)
+			time.Sleep(3*time.Second)
+			continue
+		}
 
-			log.Printf("YTSource: Downloading %s — %q", meta.VideoID, meta.Title)
-			videoData, err := ytDownloadVideo(meta.VideoID)
-			if err != nil {
-				log.Printf("YTSource: Download error for %s: %v", meta.VideoID, err)
-				continue
-			}
+		meta = &ytVideoMeta{
+			URL:         currentURL,
+			VideoID:     videoID,
+			Title:       strings.TrimSpace(detailsRaw["title"]),
+			Description: strings.TrimSpace(detailsRaw["description"]),
+			Author:      strings.TrimSpace(detailsRaw["channel"]),
+		}
 
-			// Generate AI caption using the YT title as the source
-			caption := generateAIComment(fmt.Sprintf(
-				`You are an energetic tech content creator. Write a short, punchy description (max 30 words) for this tech video repost.
+		// Clean up titles
+		meta.Title = strings.TrimSuffix(meta.Title, " - YouTube")
+
+		// Score metadata
+		score := scoreTech(strings.ToLower(meta.Title)) +
+			scoreTech(strings.ToLower(meta.Description))
+		log.Printf("YTSource: @%s score=%d title=%q",
+			meta.Author, score, truncateStr(meta.Title, 80))
+
+		if score < 5 {
+			log.Printf("YTSource: Skipping %s — score too low (%d)", videoID, score)
+			nextShort(ctx)
+			time.Sleep(4*time.Second)
+			continue
+		}
+
+		log.Printf("YTSource: Downloading qualifying Short %s — %q", videoID, meta.Title)
+		videoData, err := ytDownloadVideo(videoID)
+		if err != nil {
+			log.Printf("YTSource: Download error for %s: %v", videoID, err)
+			nextShort(ctx)
+			time.Sleep(4*time.Second)
+			continue
+		}
+
+		// Generate AI caption
+		caption := generateAIComment(fmt.Sprintf(
+			`You are an energetic tech content creator. Write a short, punchy description (max 30 words) for this tech video repost.
 
 Video title: %q
 Creator: %s
@@ -102,49 +177,71 @@ Rules:
 - Use 2-4 relevant emojis that match the tech domain (e.g. 🚀 for space, 🤖 for robotics, ⚡ for energy, 🧬 for biotech, 💻 for software)
 - NO hashtags at all — zero, none
 - Reply with ONLY the description text, nothing else`,
-				meta.Title, meta.Author,
-			))
-			if caption == "" {
-				caption = fmt.Sprintf("Mind-blowing tech content! 🚀🔥 via @%s", meta.Author)
-			}
+			meta.Title, meta.Author,
+		))
+		if caption == "" {
+			caption = fmt.Sprintf("Mind-blowing tech content! 🚀🔥 via @%s", meta.Author)
+		}
 
-			log.Printf("YTSource: Reposting with caption: %q", caption)
+		log.Printf("YTSource: Reposting with caption: %q", caption)
 
-			// Post to Instagram only when -tech flag is also active
-			if techMode {
-				if !dev {
-					_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
-						File:    bytes.NewReader(videoData),
-						Caption: caption,
-					})
-					if err != nil {
-						log.Printf("YTSource: Instagram upload error: %v", err)
-					} else {
-						log.Printf("YTSource: Posted to Instagram ✓")
-					}
+		// Post to Instagram
+		if techMode {
+			if !dev {
+				_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
+					File:    bytes.NewReader(videoData),
+					Caption: caption,
+				})
+				if err != nil {
+					log.Printf("YTSource: Instagram upload error: %v", err)
 				} else {
-					log.Printf("YTSource: [DEV] Would post %d bytes to Instagram", len(videoData))
+					log.Printf("YTSource: Posted to Instagram ✓")
 				}
-			}
-
-			// Post to YouTube Shorts if -youtube is active
-			if youtubeMode {
-				localPath := fmt.Sprintf("downloads/yt-source-%s.mp4", meta.VideoID)
-				if writeErr := writeVideoFile(localPath, videoData); writeErr == nil {
-					if !dev {
-						if err := uploadToYouTubeShorts(localPath, caption); err != nil {
-							log.Printf("YTSource: YouTube upload error: %v", err)
-						} else {
-							log.Printf("YTSource: Posted to YouTube Shorts ✓")
-						}
-					} else {
-						log.Printf("YTSource: [DEV] Would upload to YouTube Shorts: %s", localPath)
-					}
-					removeVideoFile(localPath)
-				}
+			} else {
+				log.Printf("YTSource: [DEV] Would post %d bytes to Instagram", len(videoData))
 			}
 		}
+
+		// Post to YouTube Shorts as well if -youtube is active
+		if youtubeMode {
+			localPath := fmt.Sprintf("downloads/yt-source-%s.mp4", videoID)
+			if writeErr := writeVideoFile(localPath, videoData); writeErr == nil {
+				if !dev {
+					if err := uploadToYouTubeShorts(localPath, caption); err != nil {
+						log.Printf("YTSource: YouTube upload error: %v", err)
+					} else {
+						log.Printf("YTSource: Posted to YouTube Shorts ✓")
+					}
+				} else {
+					log.Printf("YTSource: [DEV] Would upload to YouTube Shorts: %s", localPath)
+				}
+				removeVideoFile(localPath)
+			}
+		}
+
+		nextShort(ctx)
+		time.Sleep(5*time.Second)
 	}
+}
+
+// nextShort simulates navigating to the next Short video in the feed.
+func nextShort(ctx context.Context) {
+	var clicked bool
+	_ = chromedp.Run(ctx,
+		chromedp.Evaluate(`
+			(function() {
+				var nextBtn = document.querySelector('[aria-label=\"Next video\"]') || 
+				              document.querySelector('#navigation-button-down button') || 
+				              document.querySelector('#navigation-button-down');
+				if (nextBtn) {
+					nextBtn.click();
+					return true;
+				}
+				window.scrollBy(0, window.innerHeight);
+				return false;
+			})()
+		`, &clicked),
+	)
 }
 
 // writeVideoFile persists video bytes to a local path for browser-based upload.
@@ -165,122 +262,6 @@ func removeVideoFile(path string) {
 	}
 }
 
-// ytBrowseShorts uses chromedp to navigate a hashtag explore page, scrolls to load more, and scrapes Shorts URLs.
-func ytBrowseShorts(tag string) ([]string, error) {
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(),
-		append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-			chromedp.Flag("headless", true),
-			chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		)...,
-	)
-	defer cancel()
-
-	ctx, ctxCancel := chromedp.NewContext(allocCtx)
-	defer ctxCancel()
-
-	exploreURL := fmt.Sprintf("https://www.youtube.com/hashtag/%s", tag)
-
-	var hrefs []string
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(exploreURL),
-		chromedp.Sleep(4*time.Second),
-		// Scroll down to load more content dynamically
-		chromedp.Evaluate(`
-			(async () => {
-				for (let i = 0; i < 4; i++) {
-					window.scrollTo(0, document.body.scrollHeight);
-					await new Promise(r => setTimeout(r, 1500));
-				}
-			})()
-		`, nil),
-		chromedp.Sleep(2*time.Second),
-		chromedp.Evaluate(`
-			Array.from(document.querySelectorAll('a[href*="/shorts/"]'))
-			  .map(a => a.href)
-			  .filter(h => h.includes('/shorts/'))
-		`, &hrefs),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("chromedp explore error: %w", err)
-	}
-
-	// Deduplicate
-	seen := make(map[string]bool)
-	var unique []string
-	for _, href := range hrefs {
-		// Normalise to base URL
-		if idx := strings.Index(href, "?"); idx != -1 {
-			href = href[:idx]
-		}
-		if !seen[href] && strings.Contains(href, "/shorts/") {
-			seen[href] = true
-			unique = append(unique, href)
-		}
-	}
-	return unique, nil
-}
-
-// ytGetShortDetails scrapes the title, description, and author from a Short page.
-func ytGetShortDetails(url string) (*ytVideoMeta, error) {
-	// Extract video ID from URL e.g. https://www.youtube.com/shorts/AbCdEfGhIjK
-	parts := strings.Split(url, "/shorts/")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("could not extract video ID from %s", url)
-	}
-	videoID := parts[1]
-	if idx := strings.Index(videoID, "?"); idx != -1 {
-		videoID = videoID[:idx]
-	}
-
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(),
-		append(chromedp.DefaultExecAllocatorOptions[:],
-			chromedp.Flag("disable-gpu", true),
-			chromedp.Flag("no-sandbox", true),
-			chromedp.Flag("headless", true),
-		)...,
-	)
-	defer cancel()
-
-	ctx, ctxCancel := chromedp.NewContext(allocCtx)
-	defer ctxCancel()
-
-	var title, desc, author string
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(url),
-		chromedp.Sleep(3*time.Second),
-		chromedp.Evaluate(`document.title || ""`, &title),
-		chromedp.Evaluate(`
-			(function() {
-				var d = document.querySelector('meta[name="description"]');
-				return d ? d.content : "";
-			})()
-		`, &desc),
-		chromedp.Evaluate(`
-			(function() {
-				var a = document.querySelector('ytd-channel-name a, #channel-name a');
-				return a ? a.innerText : "";
-			})()
-		`, &author),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("chromedp details error: %w", err)
-	}
-
-	// Clean up title (YouTube appends " - YouTube")
-	title = strings.TrimSuffix(title, " - YouTube")
-	title = strings.TrimSpace(title)
-
-	return &ytVideoMeta{
-		URL:         url,
-		VideoID:     videoID,
-		Title:       title,
-		Description: desc,
-		Author:      author,
-	}, nil
-}
-
 // ytDownloadVideo downloads a YouTube Short video as raw bytes using kkdai/youtube.
 func ytDownloadVideo(videoID string) ([]byte, error) {
 	client := youtubelib.Client{}
@@ -290,13 +271,12 @@ func ytDownloadVideo(videoID string) ([]byte, error) {
 		return nil, fmt.Errorf("GetVideo error: %w", err)
 	}
 
-	// Prefer mp4 video-only stream ≤ 720p for Shorts
 	formats := video.Formats.Type("video/mp4")
 	if len(formats) == 0 {
 		return nil, fmt.Errorf("no mp4 formats available for %s", videoID)
 	}
 
-	// Pick the smallest (shortest/lowest res) to keep file sizes manageable
+	// Pick stream matching vertical format
 	best := formats[0]
 	for _, f := range formats {
 		if f.Width > 0 && f.Width <= 720 && f.ContentLength > 0 &&

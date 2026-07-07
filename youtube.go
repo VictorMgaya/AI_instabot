@@ -78,6 +78,17 @@ func setYoutubeCookies(ctx context.Context, cookies []youtubeCookie) error {
 	return nil
 }
 
+// saveDebugScreenshot captures a screenshot of the current page for troubleshooting.
+func saveDebugScreenshot(ctx context.Context, name string) {
+	var buf []byte
+	if err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&buf)); err == nil {
+		_ = os.WriteFile(fmt.Sprintf("downloads/%s.png", name), buf, 0o644)
+		log.Printf("YouTube: Saved debug screenshot to downloads/%s.png", name)
+	} else {
+		log.Printf("YouTube: Failed to capture debug screenshot: %v", err)
+	}
+}
+
 // uploadToYouTubeShorts uploads a local video to YouTube Shorts using chromedp.
 func uploadToYouTubeShorts(videoPath string, description string) error {
 	log.Printf("YouTube: Starting upload for video: %s", videoPath)
@@ -115,8 +126,18 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 	ctx, ctxCancel := chromedp.NewContext(allocCtx)
 	defer ctxCancel()
 
+	// Apply a strict 2.5-minute timeout to the entire upload operation to prevent hangs
+	runCtx, runCancel := context.WithTimeout(ctx, 150*time.Second)
+	defer runCancel()
+
+	// Helper to handle error by taking a screenshot before returning
+	wrapError := func(stepName string, err error) error {
+		saveDebugScreenshot(runCtx, "youtube_upload_error")
+		return fmt.Errorf("YouTube: %s failed: %w", stepName, err)
+	}
+
 	// Inject anti-detection
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := chromedp.Run(runCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		_, err := page.AddScriptToEvaluateOnNewDocument(antiDetectJS).Do(ctx)
 		return err
 	})); err != nil {
@@ -125,80 +146,91 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 
 	// 1. Go to robots.txt to set cookies
 	log.Println("YouTube: Initializing browser session...")
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(runCtx,
 		chromedp.Navigate("https://www.youtube.com/robots.txt"),
 		chromedp.Sleep(2*time.Second),
 	); err != nil {
-		return fmt.Errorf("failed to load initial page: %w", err)
+		return wrapError("initialize session", err)
 	}
 
 	// 2. Set cookies
-	if err := setYoutubeCookies(ctx, cookies); err != nil {
-		return fmt.Errorf("failed to inject cookies: %w", err)
+	if err := setYoutubeCookies(runCtx, cookies); err != nil {
+		return wrapError("inject cookies", err)
 	}
 
 	// 3. Navigate to YouTube Studio dashboard
 	log.Println("YouTube: Loading YouTube Studio...")
 	var currentURL string
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(runCtx,
 		chromedp.Navigate("https://studio.youtube.com"),
-		chromedp.Sleep(5*time.Second),
+		chromedp.Sleep(8*time.Second),
 		chromedp.Location(&currentURL),
 	); err != nil {
-		return fmt.Errorf("failed to load studio page: %w", err)
+		return wrapError("load studio page", err)
 	}
 
 	if strings.Contains(currentURL, "accounts.google.com") {
-		return fmt.Errorf("login failed: cookies might have expired. Please re-export your cookies to %s", youtubeCookiesFile)
+		return wrapError("verify login", fmt.Errorf("cookies expired or invalid, redirected to login page: %s", currentURL))
 	}
 
 	log.Println("YouTube: Login verified successfully")
 
-	// 4. Click 'Create' then 'Upload videos'
+	// 4. Click direct Upload button in the top-right header (more stable than Create menu)
 	log.Println("YouTube: Opening upload wizard...")
-	var openWizardSuccess bool
-	err = chromedp.Run(ctx,
-		chromedp.WaitVisible(`[id="create-icon"]`, chromedp.ByQuery),
+	var uploadTriggered string
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(`
 			(function() {
+				// Try direct upload button first
+				var directBtn = document.querySelector('#upload-button') || document.querySelector('[id="upload-button"]') || document.querySelector('[aria-label="Upload videos"]');
+				if (directBtn) {
+					directBtn.click();
+					return "true";
+				}
+				// Fallback to Create dropdown click
 				var createBtn = document.querySelector('#create-icon') || document.querySelector('[id="create-icon"]');
-				if (!createBtn) return false;
-				createBtn.click();
-				return true;
+				if (createBtn) {
+					createBtn.click();
+					return "dropdown";
+				}
+				return "false";
 			})()
-		`, &openWizardSuccess),
-		chromedp.Sleep(1*time.Second),
+		`, &uploadTriggered),
+		chromedp.Sleep(2*time.Second),
 	)
-	if err != nil || !openWizardSuccess {
-		return fmt.Errorf("failed to click Create button: %w", err)
+	if err != nil || uploadTriggered == "false" {
+		return wrapError("locate upload/create button", fmt.Errorf("trigger state: %s, err: %v", uploadTriggered, err))
 	}
 
-	var clickUploadSuccess bool
-	err = chromedp.Run(ctx,
-		chromedp.Evaluate(`
-			(function() {
-				var items = Array.from(document.querySelectorAll('paper-item, ytcp-text-menu-item, tp-yt-paper-item'));
-				var uploadItem = items.find(el => el.innerText.includes('Upload videos'));
-				if (!uploadItem) return false;
-				uploadItem.click();
-				return true;
-			})()
-		`, &clickUploadSuccess),
-		chromedp.Sleep(3*time.Second),
-	)
-	if err != nil || !clickUploadSuccess {
-		return fmt.Errorf("failed to click Upload videos option: %w", err)
+	// If it had to open the dropdown, click the Upload option
+	if uploadTriggered == "dropdown" {
+		var menuClicked bool
+		err = chromedp.Run(runCtx,
+			chromedp.Evaluate(`
+				(function() {
+					var items = Array.from(document.querySelectorAll('paper-item, ytcp-text-menu-item, tp-yt-paper-item'));
+					var uploadItem = items.find(el => el.innerText.includes('Upload videos'));
+					if (!uploadItem) return false;
+					uploadItem.click();
+					return true;
+				})()
+			`, &menuClicked),
+			chromedp.Sleep(3*time.Second),
+		)
+		if err != nil || !menuClicked {
+			return wrapError("click upload menu item", fmt.Errorf("menu clicked: %v, err: %v", menuClicked, err))
+		}
 	}
 
 	// 5. Select video file
 	log.Printf("YouTube: Selecting file %s...", videoPath)
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.WaitReady(`input[type="file"]`, chromedp.ByQuery),
 		chromedp.SetUploadFiles(`input[type="file"]`, []string{videoPath}, chromedp.ByQuery),
 		chromedp.Sleep(5*time.Second),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to select file: %w", err)
+		return wrapError("select upload file", err)
 	}
 
 	// 6. Enter Metadata
@@ -220,19 +252,19 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 	`, title, description)
 
 	var success bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.WaitVisible(`#title-textarea #textbox`, chromedp.ByQuery),
 		chromedp.Evaluate(fillMetadataJS, &success),
 	)
 	if err != nil || !success {
-		return fmt.Errorf("failed to fill video metadata details: %w", err)
+		return wrapError("fill metadata fields", fmt.Errorf("success: %v, err: %v", success, err))
 	}
-	chromedp.Run(ctx, chromedp.Sleep(2*time.Second))
+	chromedp.Run(runCtx, chromedp.Sleep(2*time.Second))
 
 	// 7. Select 'Not made for kids' (mandatory)
 	log.Println("YouTube: Setting audience details...")
 	var kidsSuccess bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(`
 			(function() {
 				var radio = document.querySelector('[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]') || document.querySelector('paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]') || document.querySelector('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]');
@@ -244,13 +276,13 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil || !kidsSuccess {
-		return fmt.Errorf("failed to select Not Made for Kids: %w", err)
+		return wrapError("set made-for-kids choice", fmt.Errorf("success: %v, err: %v", kidsSuccess, err))
 	}
 
 	// 8. Wizard Step 1 -> Step 2
 	log.Println("YouTube: Advancing wizard (Details -> Video Elements)...")
 	var next1Success bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(`
 			(function() {
 				var btn = document.querySelector('[id="next-button"]');
@@ -262,13 +294,13 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 		chromedp.Sleep(2*time.Second),
 	)
 	if err != nil || !next1Success {
-		return fmt.Errorf("failed to click Next on Details step: %w", err)
+		return wrapError("details next button", fmt.Errorf("success: %v, err: %v", next1Success, err))
 	}
 
 	// 9. Wizard Step 2 -> Step 3
 	log.Println("YouTube: Advancing wizard (Video Elements -> Checks)...")
 	var next2Success bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(`
 			(function() {
 				var btn = document.querySelector('[id="next-button"]');
@@ -280,13 +312,13 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 		chromedp.Sleep(2*time.Second),
 	)
 	if err != nil || !next2Success {
-		return fmt.Errorf("failed to click Next on Video Elements step: %w", err)
+		return wrapError("video elements next button", fmt.Errorf("success: %v, err: %v", next2Success, err))
 	}
 
 	// 10. Wizard Step 3 -> Step 4 (Visibility)
 	log.Println("YouTube: Advancing wizard (Checks -> Visibility)...")
 	var next3Success bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(`
 			(function() {
 				var btn = document.querySelector('[id="next-button"]');
@@ -298,7 +330,7 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 		chromedp.Sleep(2*time.Second),
 	)
 	if err != nil || !next3Success {
-		return fmt.Errorf("failed to click Next on Checks step: %w", err)
+		return wrapError("checks next button", fmt.Errorf("success: %v, err: %v", next3Success, err))
 	}
 
 	// 11. Set Visibility and Publish
@@ -312,7 +344,7 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 	}
 
 	var visibilitySuccess bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(fmt.Sprintf(`
 			(function() {
 				var radio = document.querySelector('[name="%s"]') || document.querySelector('paper-radio-button[name="%s"]') || document.querySelector('tp-yt-paper-radio-button[name="%s"]');
@@ -324,13 +356,13 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 		chromedp.Sleep(1*time.Second),
 	)
 	if err != nil || !visibilitySuccess {
-		return fmt.Errorf("failed to set visibility: %w", err)
+		return wrapError("set visibility choice", fmt.Errorf("success: %v, err: %v", visibilitySuccess, err))
 	}
 
 	// Click Done / Save / Publish
 	log.Println("YouTube: Publishing video...")
 	var doneSuccess bool
-	err = chromedp.Run(ctx,
+	err = chromedp.Run(runCtx,
 		chromedp.Evaluate(`
 			(function() {
 				var btn = document.querySelector('[id="done-button"]');
@@ -339,13 +371,13 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 				return true;
 			})()
 		`, &doneSuccess),
-		// Wait for publish popup or short delay to allow save request to dispatch
-		chromedp.Sleep(7*time.Second),
+		chromedp.Sleep(10*time.Second),
 	)
 	if err != nil || !doneSuccess {
-		return fmt.Errorf("failed to click publish button: %w", err)
+		return wrapError("publish done button", fmt.Errorf("success: %v, err: %v", doneSuccess, err))
 	}
 
 	log.Printf("YouTube: Upload and publish completed successfully ✓")
 	return nil
 }
+
