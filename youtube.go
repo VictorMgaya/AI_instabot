@@ -17,7 +17,7 @@ import (
 
 const youtubeCookiesFile = "config/youtube-cookies.txt"
 const youtubeUploadEndpoint = "https://upload.youtube.com/upload/studio"
-const youtubeOrigin = "https://www.youtube.com"
+const youtubeStudioOrigin = "https://studio.youtube.com"
 
 type youtubeCookie struct {
 	Domain   string
@@ -76,7 +76,10 @@ func parseYoutubeCookies(path string) ([]youtubeCookie, error) {
 }
 
 // buildCookieHeader returns a Cookie header string from essential session cookies.
+// Includes both .youtube.com and .google.com cookies since YouTube Studio auth
+// depends on Google-issued session tokens.
 func buildCookieHeader(cookies []youtubeCookie) string {
+	seen := make(map[string]bool)
 	var parts []string
 	for _, c := range cookies {
 		domain := strings.TrimPrefix(c.Domain, "#HttpOnly_")
@@ -86,16 +89,21 @@ func buildCookieHeader(cookies []youtubeCookie) string {
 		if !ytEssentialCookies[c.Name] {
 			continue
 		}
+		if seen[c.Name] {
+			continue
+		}
+		seen[c.Name] = true
 		parts = append(parts, c.Name+"="+c.Value)
 	}
 	return strings.Join(parts, "; ")
 }
 
 // computeSAPISIDHASH computes the Authorization header value required by YouTube Studio.
+// Origin MUST be https://studio.youtube.com for the Studio upload API.
 func computeSAPISIDHASH(sapisid string) string {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	h := sha1.New()
-	h.Write([]byte(ts + " " + sapisid + " " + youtubeOrigin))
+	h.Write([]byte(ts + " " + sapisid + " " + youtubeStudioOrigin))
 	return fmt.Sprintf("SAPISIDHASH %s_%x", ts, h.Sum(nil))
 }
 
@@ -117,25 +125,26 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 		return fmt.Errorf("failed to read YouTube cookies: %w", err)
 	}
 
-	// Find SAPISID for auth
+	// Find SAPISID for auth — prefer __Secure-3PAPISID for HTTPS Studio endpoints
 	var sapisid string
 	for _, c := range cookies {
-		if c.Name == "SAPISID" {
+		if c.Name == "__Secure-3PAPISID" {
 			sapisid = c.Value
 			break
 		}
 	}
 	if sapisid == "" {
 		for _, c := range cookies {
-			if c.Name == "__Secure-3PAPISID" {
+			if c.Name == "SAPISID" {
 				sapisid = c.Value
 				break
 			}
 		}
 	}
 	if sapisid == "" {
-		return fmt.Errorf("SAPISID not found in cookies — please re-export your YouTube cookies")
+		return fmt.Errorf("SAPISID/__Secure-3PAPISID not found — please re-export your YouTube cookies")
 	}
+	log.Printf("YouTube: Using SAPISID starting with: %s...", sapisid[:min(8, len(sapisid))])
 
 	title := description
 	if len(title) > 95 {
@@ -232,13 +241,21 @@ func uploadToYouTubeShorts(videoPath string, description string) error {
 	return nil
 }
 
+// min returns the smaller of two ints.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // setCommonHeaders sets request headers shared across all YouTube Studio API calls.
 func setCommonHeaders(req *http.Request, cookieHeader, authHeader string) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("Cookie", cookieHeader)
-	req.Header.Set("Origin", youtubeOrigin)
+	req.Header.Set("Origin", youtubeStudioOrigin)
 	req.Header.Set("Referer", "https://studio.youtube.com/")
-	req.Header.Set("X-Origin", youtubeOrigin)
+	req.Header.Set("X-Origin", youtubeStudioOrigin)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 	req.Header.Set("X-Goog-Authuser", "0")
 }
