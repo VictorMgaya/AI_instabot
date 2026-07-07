@@ -76,9 +76,9 @@ def main():
     os.makedirs("downloads", exist_ok=True)
     
     with sync_playwright() as p:
-        print("YouTube Uploader: Launching headless browser...")
-        # Use user agent matching modern browser to avoid automated action prompts
-        browser = p.chromium.launch(headless=True)
+        print("YouTube Uploader: Launching browser...")
+        # Launch headful browser so the user can see and complete security challenges
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 720}
@@ -90,15 +90,32 @@ def main():
         try:
             print("YouTube Uploader: Navigating to YouTube Studio...")
             page.goto("https://studio.youtube.com", timeout=60000)
+            
+            # If Google asks for code/2FA verification, wait for the user to complete it
+            import time
+            start_time = time.time()
+            challenge_detected = False
+            while "accounts.google.com" in page.url:
+                if not challenge_detected:
+                    print("YouTube Uploader: [ACTION REQUIRED] Google login verification / security challenge detected!", file=sys.stderr)
+                    print("YouTube Uploader: Please complete the verification prompt in the browser window...", file=sys.stderr)
+                    challenge_detected = True
+                
+                elapsed = time.time() - start_time
+                if elapsed > 120:
+                    print("Error: Verification/login challenge timed out (2 minutes).", file=sys.stderr)
+                    page.screenshot(path="downloads/playwright_expired_cookies.png")
+                    sys.exit(1)
+                
+                page.wait_for_timeout(3000)
+                
+            if challenge_detected:
+                print("YouTube Uploader: Challenge verification completed successfully!")
+                
             page.wait_for_timeout(5000)
             
-            if "accounts.google.com" in page.url:
-                print("Error: Authentication failed. Session cookies are expired or invalid.", file=sys.stderr)
-                page.screenshot(path="downloads/playwright_expired_cookies.png")
-                sys.exit(1)
-                
             print("YouTube Uploader: Logged in successfully. Dismissing any welcome/onboarding dialogs...")
-            # Dismiss any popup overlays or Swahili onboarding steps (e.g. "Inayofuata" / Next cards)
+            # Dismiss any welcome overlays or Swahili onboarding steps (e.g. "Inayofuata" / Next cards)
             for i in range(3):
                 page.evaluate("""
                     (function() {
@@ -115,17 +132,17 @@ def main():
                 page.wait_for_timeout(1000)
 
             print("YouTube Uploader: Opening upload wizard...")
-            # Try direct upload arrow icon in top right first
+            # Try direct upload arrow icon in top right first, using force=True to bypass overlay backdrops
             upload_btn = page.locator('#upload-button, [id="upload-button"], [aria-label*="upload"], [aria-label*="Pakia"]')
             if upload_btn.is_visible():
-                upload_btn.click()
+                upload_btn.click(force=True)
             else:
                 # Fallback to Buni/Create button dropdown click
                 create_btn = page.locator('#create-icon, [id="create-icon"], ytcp-button:has-text("Buni"), ytcp-button:has-text("Create")')
-                create_btn.click()
+                create_btn.click(force=True)
                 page.wait_for_timeout(1500)
                 # Click the first item in the dropdown list (always 'Upload videos' or 'Pakia video')
-                page.locator('paper-item, ytcp-text-menu-item, tp-yt-paper-item').first.click()
+                page.locator('paper-item, ytcp-text-menu-item, tp-yt-paper-item').first.click(force=True)
                 
             page.wait_for_selector('input[type="file"]', timeout=30000)
             print("YouTube Uploader: Selecting video file...")
@@ -147,36 +164,36 @@ def main():
             desc_input.fill(args.description)
             
             print("YouTube Uploader: Setting audience details (Not Made for Kids)...")
-            page.click('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"], paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]')
+            page.click('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"], paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]', force=True)
             page.wait_for_timeout(1000)
             
             # Navigate Details -> Video Elements
             print("YouTube Uploader: Navigating Step 1 -> Step 2...")
-            page.click('#next-button')
+            page.click('#next-button', force=True)
             page.wait_for_timeout(2000)
             
             # Navigate Video Elements -> Checks
             print("YouTube Uploader: Navigating Step 2 -> Step 3...")
-            page.click('#next-button')
+            page.click('#next-button', force=True)
             page.wait_for_timeout(2000)
             
             # Navigate Checks -> Visibility
             print("YouTube Uploader: Navigating Step 3 -> Step 4...")
-            page.click('#next-button')
+            page.click('#next-button', force=True)
             page.wait_for_timeout(2000)
             
             # Select Visibility mode
             if args.dev:
                 print("YouTube Uploader: Setting visibility to PRIVATE (dev mode)...")
-                page.click('tp-yt-paper-radio-button[name="PRIVATE"], paper-radio-button[name="PRIVATE"]')
+                page.click('tp-yt-paper-radio-button[name="PRIVATE"], paper-radio-button[name="PRIVATE"]', force=True)
             else:
                 print("YouTube Uploader: Setting visibility to PUBLIC...")
-                page.click('tp-yt-paper-radio-button[name="PUBLIC"], paper-radio-button[name="PUBLIC"]')
+                page.click('tp-yt-paper-radio-button[name="PUBLIC"], paper-radio-button[name="PUBLIC"]', force=True)
                 
             page.wait_for_timeout(1000)
             
             print("YouTube Uploader: Submitting and publishing...")
-            page.click('#done-button')
+            page.click('#done-button', force=True)
             
             # Wait for upload completion dialog or wait a sufficient block for submission to complete
             page.wait_for_timeout(10000)
