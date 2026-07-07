@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 )
@@ -13,7 +12,7 @@ const youtubeCookiesFile = "config/youtube-cookies.txt"
 // uploadToYouTubeShorts runs the Python Playwright uploader script as a subprocess
 // and streams its output in real-time.
 func uploadToYouTubeShorts(videoPath string, title string, description string) error {
-	log.Printf("YouTube: Running Python Playwright uploader for: %s", videoPath)
+	logPrefix(PrefixYT, "Running Playwright uploader for %s", videoPath)
 
 	args := []string{
 		"scripts/youtube_uploader.py",
@@ -42,6 +41,6 @@ func uploadToYouTubeShorts(videoPath string, title string, description string) e
 		return fmt.Errorf("playwright uploader failed: %w", err)
 	}
 
-	log.Println("YouTube: Video uploaded successfully ✓")
+	logPrefix(PrefixYT, "Video uploaded successfully ✓")
 	return nil
 }

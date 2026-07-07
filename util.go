@@ -111,8 +111,8 @@ func parseOptions() {
 	flag.BoolVar(&dev, "dev", false, "Use this option to use the script in development mode : nothing will be done for real")
 	flag.BoolVar(&logs, "logs", false, "Use this option to enable the logfile")
 	flag.BoolVar(&noduplicate, "noduplicate", false, "Use this option to skip following, liking and commenting same user in this session")
-	flag.BoolVar(&youtubeMode, "youtube", false, "Use this option to upload tech videos to YouTube Shorts as well")
-	flag.BoolVar(&ytSourceMode, "yt-source", false, "Use this option to also crawl YouTube Shorts as a content source")
+	flag.BoolVar(&youtubeMode, "youtube", false, "Cross-post videos to YouTube Shorts (requires config/youtube-cookies.txt)")
+	flag.BoolVar(&ytSourceMode, "yt-source", false, "Crawl YouTube Shorts as a content source (combine with -tech, -youtube, or both)")
 
 	flag.Parse()
 
@@ -150,7 +150,7 @@ func getConfig() {
 	viper.AutomaticEnv()
 
 	// Confirms which config file is used
-	log.Printf("Using config: %s\n\n", viper.ConfigFileUsed())
+	logPrefix(PrefixSafety, "Config loaded from %s", viper.ConfigFileUsed())
 
 	likeLowerLimit = viper.GetInt("limits.like.min")
 	likeUpperLimit = viper.GetInt("limits.like.max")
@@ -298,7 +298,7 @@ func loadOrCreateDailyCounters() {
 		if json.Unmarshal(data, &stored) == nil {
 			if stored.Date == todayDate() {
 				dailyCounters = stored
-				log.Printf("[Safety] Loaded daily counters: follows=%d likes=%d comments=%d",
+				logPrefix(PrefixSafety, "Loaded daily counters: follows=%d likes=%d comments=%d",
 					dailyCounters.InstagramFollows,
 					dailyCounters.InstagramLikes,
 					dailyCounters.InstagramComments)
@@ -308,7 +308,7 @@ func loadOrCreateDailyCounters() {
 	}
 	// New day — reset counters
 	dailyCounters = DailyCounters{Date: todayDate()}
-	log.Println("[Safety] New day — daily counters reset.")
+	logPrefix(PrefixSafety, "New day — daily counters reset")
 	saveDailyCounters()
 }
 
@@ -355,17 +355,17 @@ func dailyLimitReached(action string) bool {
 	switch action {
 	case "follow":
 		if dailyInstagramFollowLimit > 0 && dailyCounters.InstagramFollows >= dailyInstagramFollowLimit {
-			log.Printf("[Safety] Daily follow limit reached (%d/%d)", dailyCounters.InstagramFollows, dailyInstagramFollowLimit)
+			logPrefix(PrefixSafety, "Daily follow limit reached (%d/%d)", dailyCounters.InstagramFollows, dailyInstagramFollowLimit)
 			return true
 		}
 	case "like":
 		if dailyInstagramLikeLimit > 0 && dailyCounters.InstagramLikes >= dailyInstagramLikeLimit {
-			log.Printf("[Safety] Daily like limit reached (%d/%d)", dailyCounters.InstagramLikes, dailyInstagramLikeLimit)
+			logPrefix(PrefixSafety, "Daily like limit reached (%d/%d)", dailyCounters.InstagramLikes, dailyInstagramLikeLimit)
 			return true
 		}
 	case "comment":
 		if dailyInstagramCommentLimit > 0 && dailyCounters.InstagramComments >= dailyInstagramCommentLimit {
-			log.Printf("[Safety] Daily comment limit reached (%d/%d)", dailyCounters.InstagramComments, dailyInstagramCommentLimit)
+			logPrefix(PrefixSafety, "Daily comment limit reached (%d/%d)", dailyCounters.InstagramComments, dailyInstagramCommentLimit)
 			return true
 		}
 	}
@@ -406,8 +406,8 @@ func checkSleepAndSleep() {
 	wakeTime := wakeBase.Add(jitter)
 
 	sleepDuration := time.Until(wakeTime)
-	log.Printf("[Safety] 🌙 Night sleep mode — sleeping until ~%s (%s)",
+	logPrefix(PrefixSafety, "Night sleep — waking at ~%s (%s)",
 		wakeTime.Format("15:04"), sleepDuration.Round(time.Minute))
 	time.Sleep(sleepDuration)
-	log.Println("[Safety] ☀️ Woke up — resuming bot.")
+	logPrefix(PrefixSafety, "Woke up — resuming bot")
 }

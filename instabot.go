@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -18,40 +19,56 @@ func main() {
 	parseOptions()
 	getConfig()
 
+	printBanner()
+
 	if youtubeMode {
 		if _, err := os.Stat(youtubeCookiesFile); os.IsNotExist(err) {
-			log.Fatalf("YouTube Error: cookies file not found at %s. Please export your YouTube/Google cookies in Netscape format to this path to enable YouTube upload.", youtubeCookiesFile)
+			fmt.Printf("  %s✗%s cookies file not found at %s\n", ColorRed, ColorReset, youtubeCookiesFile)
+			log.Fatalf("Please export your YouTube/Google cookies in Netscape format to this path to enable YouTube upload.")
 		}
-		log.Println("YouTube: Verification of cookie path successful")
+		logPrefix(PrefixYT, "Cookies verified at %s", youtubeCookiesFile)
+	}
+
+	loggedIn := false
+	needsLogin := run || techMode || (ytSourceMode && run) || unfollow
+
+	if ytSourceMode && !run && !techMode {
+		// Pure YT-to-YT mode — no Instagram login needed
+		printSection("YouTube Shorts Crawler")
+		logPrefix(PrefixYTSource, "Starting in YT→YT mode (no Instagram)")
+		instabot.ytSourceLoop()
+	} else if needsLogin {
+		login()
+		loggedIn = true
+	}
+
+	if run && loggedIn {
+		printSection("Engagement Loop")
+		logPrefix(PrefixExplore, "Starting explore engagement (like, comment)")
+	}
+
+	if techMode && loggedIn {
+		printSection("Tech Repost Loop")
+		logPrefix(PrefixTech, "Hunting tech videos from Instagram Explore...")
+		if ytSourceMode {
+			logPrefix(PrefixYTSource, "YouTube Shorts crawler running in parallel")
+		}
 	}
 
 	if techMode && run {
-		login()
-		log.Println("Starting both tech repost and engagement modes simultaneously...")
 		go instabot.techExploreLoop()
 		instabot.loopRandom()
 	} else if techMode {
-		login()
-		log.Println("Starting tech video repost mode (random explore)...")
 		instabot.techExploreLoop()
-	} else if ytSourceMode && run {
-		// YT source + IG engagement — need Instagram login
-		login()
-		log.Println("Starting YouTube source + Instagram engagement simultaneously...")
-		go instabot.ytSourceLoop()
-		instabot.loopRandom()
-	} else if ytSourceMode {
-		// Pure YT-only mode: crawl YouTube Shorts, post to YouTube — no Instagram needed
-		log.Println("Starting YouTube Shorts crawler (YT → YT mode)...")
-		instabot.ytSourceLoop()
 	} else if run {
-		login()
 		instabot.loopRandom()
-	} else if unfollow {
-		login()
+	} else if unfollow && loggedIn {
+		printSection("Unfollow Sync")
 		instabot.syncFollowers()
 		instabot.updateConfig()
-	} else {
-		log.Println("No mode selected. Use -run, -tech, -yt-source, or -sync. Add -h for help.")
+	} else if !run && !techMode && !ytSourceMode && !unfollow {
+		fmt.Printf("  %s!%s No mode selected. Use %s-run%s, %s-tech%s, %s-yt-source%s, or %s-sync%s.\n",
+			ColorYellow, ColorReset,
+			ColorCyan, ColorReset, ColorCyan, ColorReset, ColorCyan, ColorReset, ColorCyan, ColorReset)
 	}
 }

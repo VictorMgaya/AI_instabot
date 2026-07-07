@@ -67,7 +67,7 @@ func generateAIComment(prompt string) string {
 		apiKey = os.Getenv("OPENROUTER_API_KEY")
 	}
 	if apiKey == "" {
-		log.Println("No OpenRouter API key configured, falling back to random comment")
+		logPrefix(PrefixAI, "No API key configured, falling back to random comment")
 		return ""
 	}
 
@@ -98,7 +98,7 @@ func generateAIComment(prompt string) string {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("OpenRouter API error: %v", err)
+		logPrefix(PrefixAI, "API error: %v", err)
 		return ""
 	}
 	defer resp.Body.Close()
@@ -116,18 +116,18 @@ func generateAIComment(prompt string) string {
 	}
 
 	if result.Error != nil {
-		log.Printf("OpenRouter API error: %s", result.Error.Message)
+		logPrefix(PrefixAI, "API error: %s", result.Error.Message)
 		return ""
 	}
 
 	if len(result.Choices) == 0 {
-		log.Println("OpenRouter returned no choices")
+		logPrefix(PrefixAI, "No choices returned by API")
 		return ""
 	}
 
 	comment := strings.TrimSpace(result.Choices[0].Message.Content)
 	comment = strings.Trim(comment, `"'`)
 
-	log.Printf("AI generated comment: %s", comment)
+	logPrefix(PrefixAI, "Generated: %s", comment)
 	return comment
 }

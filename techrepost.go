@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
 	"strings"
@@ -183,13 +182,14 @@ func (myInstabot MyInstabot) techExploreLoop() {
 	os.MkdirAll("downloads", 0o755)
 
 	if ytSourceMode {
-		log.Println("YTSource: Launching YouTube Shorts crawler in parallel...")
+		logPrefix(PrefixYTSource, "Spawning YouTube Shorts crawler goroutine")
 		go myInstabot.ytSourceLoop()
 	}
 
 	for {
-		log.Println("TechRepost: Scanning explore for qualifying tech videos...")
+		logPrefix(PrefixTech, "Scanning explore for qualifying tech videos")
 		myInstabot.techBrowseExplore()
+		time.Sleep(30 * time.Second)
 	}
 }
 
@@ -203,14 +203,14 @@ func (myInstabot MyInstabot) techBrowseExplore() {
 		}
 		if err := myInstabot.Insta.Discover.Error(); err != nil {
 			if strings.Contains(err.Error(), "feedback_required") {
-				log.Printf("TechRepost: Rate-limited, backing off 60s...")
+				logPrefix(PrefixTech, "Rate-limited — backing off 60s")
 				time.Sleep(60 * time.Second)
 			}
 			return err
 		}
 		return nil
 	}); err != nil {
-		log.Printf("TechRepost: Explore fetch error: %v", err)
+		logPrefix(PrefixTech, "Explore fetch error: %v", err)
 		return
 	}
 
@@ -234,11 +234,11 @@ func (myInstabot MyInstabot) techProcessSection(section goinsta.DiscoverSectiona
 
 		score := scoreTech(strings.ToLower(item.Caption.Text)) +
 			scoreTech(strings.ToLower(item.User.Biography))
-		log.Printf("TechRepost: @%s score=%d caption=%q",
+		logPrefix(PrefixTech, "@%s score=%d caption=%q",
 			item.User.Username, score, truncateStr(item.Caption.Text, 80))
 
 		if !isTechRelated(&item) {
-			log.Printf("TechRepost: Skipping @%s — score too low", item.User.Username)
+			logPrefix(PrefixTech, "Skipping @%s — score too low", item.User.Username)
 			continue
 		}
 
@@ -255,23 +255,23 @@ func truncateStr(s string, n int) string {
 }
 
 func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
-	log.Printf("TechRepost: Downloading video %d from @%s", item.Pk, item.User.Username)
+	logPrefix(PrefixTech, "Downloading video %d from @%s", item.Pk, item.User.Username)
 
 	videoData, err := item.Download()
 	if err != nil {
-		log.Printf("TechRepost: Download error: %v", err)
+		logPrefix(PrefixTech, "Download error: %v", err)
 		return
 	}
 
-	log.Printf("TechRepost: Downloaded %d bytes", len(videoData))
+	logPrefix(PrefixTech, "Downloaded %d bytes from @%s", len(videoData), item.User.Username)
 
 	// Save video locally so it can be uploaded via browser automation
 	localPath := fmt.Sprintf("downloads/repost-%d.mp4", item.Pk)
 	if err := writeVideoFile(localPath, videoData); err != nil {
-		log.Printf("TechRepost: Local save error: %v", err)
+		logPrefix(PrefixTech, "Local save error: %v", err)
 		localPath = ""
 	} else {
-		log.Printf("TechRepost: Video saved locally at %s", localPath)
+		logPrefix(PrefixTech, "Saved locally at %s", localPath)
 		defer func() {
 			removeVideoFile(localPath)
 		}()
@@ -279,7 +279,7 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 
 	caption := myInstabot.generateTechDescription(item)
 
-	log.Printf("TechRepost: Uploading with caption: \"%s\"", caption)
+	logPrefix(PrefixTech, "Uploading → %s", caption)
 
 	if !dev {
 		_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
@@ -287,13 +287,13 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 			Caption: caption,
 		})
 		if err != nil {
-			log.Printf("TechRepost: Upload error: %v", err)
+			logPrefix(PrefixTech, "Upload error: %v", err)
 			return
 		}
-		log.Printf("TechRepost: Uploaded successfully ✓")
+		logPrefix(PrefixTech, "Uploaded successfully ✓")
 		techRepostCount++
 	} else {
-		log.Printf("TechRepost: [DEV MODE] Would upload %d bytes with caption: \"%s\"", len(videoData), caption)
+		logPrefix(PrefixTech, "[DEV] Would upload %d bytes", len(videoData))
 		techRepostCount++
 	}
 
@@ -304,7 +304,7 @@ func (myInstabot MyInstabot) downloadAndRepost(item *goinsta.Item) {
 		}
 		err := uploadToYouTubeShorts(localPath, ytTitle, caption)
 		if err != nil {
-			log.Printf("TechRepost: YouTube upload error: %v", err)
+			logPrefix(PrefixTech, "YouTube upload error: %v", err)
 		}
 	}
 }

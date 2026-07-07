@@ -41,7 +41,7 @@ func reloadSession() error {
 		instabot.Insta = insta
 	}
 
-	log.Println("Successfully logged in")
+	logPrefix(PrefixInsta, "Logged in as @%s", viper.GetString("user.instagram.username"))
 	return nil
 
 }
@@ -55,7 +55,7 @@ func createAndSaveSession() {
 
 	err = instabot.Insta.Export("./goinsta-session")
 	check(err)
-	log.Println("Created and saved the session")
+	logPrefix(PrefixInsta, "Session created and saved")
 }
 
 func getInput(text string) string {
@@ -193,7 +193,7 @@ func (myInstabot MyInstabot) loopRandom() {
 		numFollowed = 0
 		numLiked = 0
 		numCommented = 0
-		log.Println("Fetching random content from explore...")
+		logPrefix(PrefixExplore, "Fetching explore feed...")
 		myInstabot.browseExplore()
 
 		// Natural pause between explore cycles (2–5 min)
@@ -226,11 +226,15 @@ func (myInstabot MyInstabot) browseExplore() {
 			return nil
 		}
 		if err := myInstabot.Insta.Discover.Error(); err != nil {
+			if strings.Contains(err.Error(), "feedback_required") {
+				logPrefix(PrefixExplore, "Rate-limited — backing off 60s")
+				time.Sleep(60 * time.Second)
+			}
 			return err
 		}
 		return nil
 	}); err != nil {
-		log.Printf("Explore fetch error: %v", err)
+		logPrefix(PrefixExplore, "Fetch error: %v", err)
 		return
 	}
 

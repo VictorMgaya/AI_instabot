@@ -226,7 +226,23 @@ def main():
             page.wait_for_timeout(1000)
             
             print("YouTube Uploader: Waiting for done-button to be ready (upload processing)...")
-            page.wait_for_selector('#done-button', state='visible', timeout=180000)
+            done_visible = False
+            done_poll_start = time.time()
+            done_timeout = 600  # 10 minutes for long processing
+            while time.time() - done_poll_start < done_timeout:
+                done_btn_state = page.locator('#done-button')
+                if done_btn_state.is_visible():
+                    done_visible = True
+                    break
+                elapsed = int(time.time() - done_poll_start)
+                if elapsed % 30 == 0:
+                    print(f"YouTube Uploader: Still waiting for processing... ({elapsed}s)")
+                page.wait_for_timeout(5000)
+            
+            if not done_visible:
+                print("Error: Done-button did not become visible within timeout.", file=sys.stderr)
+                sys.exit(1)
+                
             page.wait_for_timeout(1000)
             
             print("YouTube Uploader: Submitting and publishing...")

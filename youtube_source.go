@@ -47,7 +47,7 @@ func loadProcessed() map[string]bool {
 			m[id] = true
 		}
 	}
-	log.Printf("YTSource: Loaded %d previously processed video IDs", len(m))
+	logPrefix(PrefixYTSource, "Loaded %d previously processed video IDs", len(m))
 	return m
 }
 
@@ -65,7 +65,7 @@ func saveProcessed(videoID string) {
 
 func (myInstabot MyInstabot) ytSourceLoop() {
 	rand.Seed(time.Now().UnixNano())
-	log.Println("YTSource: Starting organic YouTube Shorts explore crawler...")
+	logPrefix(PrefixYTSource, "Starting organic YouTube Shorts explore crawler")
 
 	seen := loadProcessed()
 
@@ -83,7 +83,7 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 	defer ctxCancel()
 
 	// Initial load of the main Shorts feed
-	log.Println("YTSource: Loading Shorts explore feed...")
+	logPrefix(PrefixYTSource, "Loading Shorts explore feed")
 	err := chromedp.Run(ctx,
 		chromedp.Navigate("https://www.youtube.com/shorts"),
 		chromedp.Sleep(8*time.Second),
@@ -104,7 +104,7 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 		// URL format is https://www.youtube.com/shorts/VideoID
 		parts := strings.Split(currentURL, "/shorts/")
 		if len(parts) < 2 {
-			log.Printf("YTSource: Not on a Shorts page (%s), skipping to next...", currentURL)
+			logPrefix(PrefixYTSource, "Not on a Shorts page (%s), skipping to next", currentURL)
 			nextShort(ctx)
 			time.Sleep(3*time.Second)
 			continue
@@ -179,23 +179,23 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 		// Score metadata
 		score := scoreTech(strings.ToLower(meta.Title)) +
 			scoreTech(strings.ToLower(meta.Description))
-		log.Printf("YTSource: @%s score=%d title=%q",
+		logPrefix(PrefixYTSource, "@%s score=%d title=%q",
 			meta.Author, score, truncateStr(meta.Title, 80))
 
 		// When posting to YouTube, bypass tech filter — upload everything found
 		if youtubeMode {
-			log.Printf("YTSource: YT upload mode — skipping score filter for %s", videoID)
+			logPrefix(PrefixYTSource, "YT upload mode — skipping score filter for %s", videoID)
 		} else if score < 5 {
-			log.Printf("YTSource: Skipping %s — score too low (%d)", videoID, score)
+			logPrefix(PrefixYTSource, "Skipping %s — score too low (%d)", videoID, score)
 			nextShort(ctx)
 			time.Sleep(4*time.Second)
 			continue
 		}
 
-		log.Printf("YTSource: Downloading qualifying Short %s — %q", videoID, meta.Title)
+		logPrefix(PrefixYTSource, "Downloading Short %s — %q", videoID, meta.Title)
 		videoData, err := ytDownloadVideo(videoID)
 		if err != nil {
-			log.Printf("YTSource: Download error for %s: %v", videoID, err)
+			logPrefix(PrefixYTSource, "Download error for %s: %v", videoID, err)
 			nextShort(ctx)
 			time.Sleep(4*time.Second)
 			continue
@@ -248,22 +248,24 @@ Rules:
 			}
 		}
 
-		log.Printf("YTSource: Repost title=%q desc=%q", ytTitle, description)
+		logPrefix(PrefixYTSource, "Title=%q | Desc=%q", ytTitle, description)
 
-		// Post to Instagram
+		// Post to Instagram (always apply score filter — choosy for IG)
 		if techMode {
-			if !dev {
+			if score < 5 {
+				logPrefix(PrefixYTSource, "Skipping IG — score too low (%d) for %s", score, videoID)
+			} else if !dev {
 				_, err := myInstabot.Insta.Upload(&goinsta.UploadOptions{
 					File:    bytes.NewReader(videoData),
 					Caption: description,
 				})
 				if err != nil {
-					log.Printf("YTSource: Instagram upload error: %v", err)
+					logPrefix(PrefixYTSource, "IG upload error: %v", err)
 				} else {
-					log.Printf("YTSource: Posted to Instagram ✓")
+					logPrefix(PrefixYTSource, "Posted to Instagram ✓")
 				}
 			} else {
-				log.Printf("YTSource: [DEV] Would post %d bytes to Instagram", len(videoData))
+				logPrefix(PrefixYTSource, "[DEV] Would post %d bytes to Instagram", len(videoData))
 			}
 		}
 
@@ -273,14 +275,14 @@ Rules:
 			if writeErr := writeVideoFile(localPath, videoData); writeErr == nil {
 				if !dev {
 					if err := uploadToYouTubeShorts(localPath, ytTitle, description); err != nil {
-						log.Printf("YTSource: YouTube upload error: %v", err)
+						logPrefix(PrefixYTSource, "YT upload error: %v", err)
 					} else {
-						log.Printf("YTSource: Posted to YouTube Shorts ✓")
+						logPrefix(PrefixYTSource, "Posted to YouTube Shorts ✓")
 						saveProcessed(videoID)
 						seen[videoID] = true
 					}
 				} else {
-					log.Printf("YTSource: [DEV] Would upload to YouTube Shorts: %s", localPath)
+					logPrefix(PrefixYTSource, "[DEV] Would upload to YouTube Shorts: %s", localPath)
 				}
 				removeVideoFile(localPath)
 			}
