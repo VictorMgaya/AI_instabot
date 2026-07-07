@@ -131,16 +131,16 @@ def main():
                 page.wait_for_timeout(1000)
 
             print("YouTube Uploader: Opening upload wizard...")
-            # Try direct upload arrow icon in top right first, using force=True to bypass overlay backdrops
-            upload_btn = page.locator('#upload-button, [id="upload-button"], [aria-label*="upload"], [aria-label*="Pakia"]')
+            upload_btn = page.locator('#upload-button, [id="upload-button"], [aria-label*="upload"], [aria-label*="Pakia"]').first
             if upload_btn.is_visible():
                 upload_btn.click(force=True)
             else:
-                # Fallback to Buni/Create button dropdown click
-                create_btn = page.locator('#create-icon, [id="create-icon"], ytcp-button:has-text("Buni"), ytcp-button:has-text("Create")')
-                create_btn.click(force=True)
+                create_btn = page.locator('#create-icon, [id="create-icon"]').first
+                if create_btn.is_visible():
+                    create_btn.click(force=True)
+                else:
+                    page.locator('ytcp-button:has-text("Create"), ytcp-button:has-text("Buni")').first.click(force=True)
                 page.wait_for_timeout(1500)
-                # Click the first item in the dropdown list (always 'Upload videos' or 'Pakia video')
                 page.locator('paper-item, ytcp-text-menu-item, tp-yt-paper-item').first.click(force=True)
                 
             page.wait_for_selector('input[type="file"]', state="attached", timeout=30000)

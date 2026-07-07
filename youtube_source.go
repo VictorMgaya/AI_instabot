@@ -182,9 +182,10 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 		log.Printf("YTSource: @%s score=%d title=%q",
 			meta.Author, score, truncateStr(meta.Title, 80))
 
-		// In pure YT-to-YT mode (no Instagram target), bypass the tech filter entirely
-		isPureYtToYt := youtubeMode && !techMode
-		if !isPureYtToYt && score < 5 {
+		// When posting to YouTube, bypass tech filter — upload everything found
+		if youtubeMode {
+			log.Printf("YTSource: YT upload mode — skipping score filter for %s", videoID)
+		} else if score < 5 {
 			log.Printf("YTSource: Skipping %s — score too low (%d)", videoID, score)
 			nextShort(ctx)
 			time.Sleep(4*time.Second)
@@ -202,7 +203,7 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 
 		// Generate AI description
 		persona := "content creator"
-		if !isPureYtToYt {
+		if techMode && !youtubeMode {
 			persona = "tech content creator"
 		}
 
@@ -339,9 +340,9 @@ func ffmpegBin() string {
 	return ""
 }
 
-// ytDownloadVideo downloads a YouTube Short video and compresses it for upload.
-// Uses composite download (best video + best audio merged via ffmpeg) then compresses
-// to a reasonable size. Falls back to best muxed stream if ffmpeg is unavailable.
+// ytDownloadVideo downloads a YouTube Short video at maximum quality.
+// Uses composite download (best video + best audio merged losslessly via ffmpeg -c copy).
+// Falls back to best muxed stream if ffmpeg is unavailable.
 func ytDownloadVideo(videoID string) ([]byte, error) {
 	client := youtubelib.Client{}
 
@@ -351,66 +352,16 @@ func ytDownloadVideo(videoID string) ([]byte, error) {
 	}
 
 	ffmpeg := ffmpegBin()
-
-	// Try composite download first
 	if ffmpeg != "" {
-		data, err := ytDownloadComposite(video, ffmpeg)
-		if err == nil {
-			return ytCompressBytes(data, ffmpeg)
-		}
-		log.Printf("YTSource: Composite failed for %s: %v", videoID, err)
+		return ytDownloadComposite(video, ffmpeg)
 	}
 
-	// Fall back to muxed stream
-	muxed, err := ytDownloadMuxed(video)
-	if err != nil {
-		return nil, err
-	}
-
-	if ffmpeg != "" {
-		return ytCompressBytes(muxed, ffmpeg)
-	}
-
-	log.Printf("YTSource: ffmpeg not found, using raw muxed stream for %s", videoID)
-	return muxed, nil
-}
-
-// ytCompressBytes re-encodes raw video bytes to a compressed H.264 MP4 via ffmpeg.
-func ytCompressBytes(data []byte, ffmpeg string) ([]byte, error) {
-	tmpDir, err := os.MkdirTemp("", "yt-compress-*")
-	if err != nil {
-		return nil, fmt.Errorf("temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	inPath := filepath.Join(tmpDir, "in.mp4")
-	outPath := filepath.Join(tmpDir, "out.mp4")
-
-	if err := os.WriteFile(inPath, data, 0o644); err != nil {
-		return nil, fmt.Errorf("write input: %w", err)
-	}
-
-	cmd := exec.Command(ffmpeg, "-y", "-i", inPath,
-		"-c:v", "libx264", "-crf", "28", "-preset", "fast",
-		"-c:a", "aac", "-b:a", "128k",
-		"-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease",
-		"-movflags", "+faststart",
-		"-loglevel", "error", outPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("compress failed: %w\n%s", err, out)
-	}
-
-	outData, err := os.ReadFile(outPath)
-	if err != nil {
-		return nil, fmt.Errorf("read compressed: %w", err)
-	}
-
-	log.Printf("YTSource: Compressed %dKB -> %dKB", len(data)/1024, len(outData)/1024)
-	return outData, nil
+	log.Printf("YTSource: ffmpeg not found, falling back to muxed stream for %s", videoID)
+	return ytDownloadMuxed(video)
 }
 
 // ytDownloadComposite downloads best video-only + audio-only streams and merges via ffmpeg.
-// Returns raw merged bytes (no compression — caller should compress via ytCompressBytes).
+// Uses -c copy (stream copy, zero re-encode) to preserve original quality.
 func ytDownloadComposite(video *youtubelib.Video, ffmpeg string) ([]byte, error) {
 	client := youtubelib.Client{}
 

@@ -347,7 +347,7 @@ func (myInstabot MyInstabot) processItem(image goinsta.Item) {
 		log.Printf("Skipping like for %s (followers: %d, range: [%d, %d])\n", userInfo.Username, followerCount, likeLowerLimit, likeUpperLimit)
 	}
 
-	if follow && !containsString(userBlacklist, userInfo.Username) {
+	if follow && !ytSourceMode && !containsString(userBlacklist, userInfo.Username) {
 		randDelay(12, 25)
 		myInstabot.followUser(userInfo)
 		randDelay(15, 30)
