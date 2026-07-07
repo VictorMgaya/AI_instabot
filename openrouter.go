@@ -35,6 +35,33 @@ type openRouterResponse struct {
 }
 
 func (myInstabot MyInstabot) generateAISuggestion(image goinsta.Item, userInfo *goinsta.User) string {
+	caption := strings.TrimSpace(image.Caption.Text)
+	if caption == "" {
+		caption = "no caption"
+	}
+
+	prompt := fmt.Sprintf(
+		`You are an enthusiastic Instagram user browsing photos. Write ONE short, natural comment (max 15 words) for this post.
+
+Post caption: "%s"
+Username: %s
+Followers: %d
+Likes on post: %d
+
+Rules:
+- Be genuine, positive and expressive
+- Refer to the caption content if possible
+- Use 1-3 relevant emojis that fit the vibe — they make comments feel alive
+- Don't be bland or robotic
+- Sound like a real enthusiastic person
+- Reply with ONLY the comment text, nothing else`,
+		caption, userInfo.Username, userInfo.FollowerCount, image.Likes,
+	)
+
+	return generateAIComment(prompt)
+}
+
+func generateAIComment(prompt string) string {
 	apiKey := viper.GetString("openrouter.api_key")
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENROUTER_API_KEY")
@@ -43,29 +70,6 @@ func (myInstabot MyInstabot) generateAISuggestion(image goinsta.Item, userInfo *
 		log.Println("No OpenRouter API key configured, falling back to random comment")
 		return ""
 	}
-
-	caption := strings.TrimSpace(image.Caption.Text)
-	if caption == "" {
-		caption = "no caption"
-	}
-
-	prompt := fmt.Sprintf(
-		`You are an Instagram user browsing photos. Write ONE short, natural comment (max 15 words) for this post.
-
-Post caption: "%s"
-Username: %s
-Followers: %d
-Likes on post: %d
-
-Rules:
-- Be genuine and positive
-- Refer to the caption content if possible
-- Don't be generic like "nice pic"
-- Don't use emojis excessively (max 1)
-- Sound like a real person, not a bot
-- Reply with ONLY the comment text, nothing else`,
-		caption, userInfo.Username, userInfo.FollowerCount, image.Likes,
-	)
 
 	body := openRouterRequest{
 		Model: "auto",

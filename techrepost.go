@@ -288,23 +288,23 @@ func (myInstabot MyInstabot) generateTechDescription(item *goinsta.Item) string 
 	}
 
 	prompt := fmt.Sprintf(
-		`You are a tech content reposter. Write a short, engaging description (max 25 words) for this tech video.
+		`You are an energetic tech content creator. Write a short, punchy description (max 30 words) for this tech video repost.
 
 Video caption: "%s"
 Username: %s
 
 Rules:
-- Be informative and interesting
-- Sound like a tech enthusiast
+- Be informative, exciting and enthusiastic
+- Sound like a passionate tech enthusiast
+- Use 2-4 relevant emojis that match the tech domain (e.g. 🚀 for space, 🤖 for robotics, ⚡ for energy, 🧬 for biotech, 💻 for software)
 - NO hashtags at all — zero, none
-- Don't use emojis excessively (max 1)
 - Reply with ONLY the description text, nothing else`,
 		caption, item.User.Username,
 	)
 
 	desc := generateAIComment(prompt)
 	if desc == "" {
-		desc = "Amazing tech content! 🚀"
+		desc = "This is next-level tech! 🚀🔥"
 	}
 	return desc
 }
