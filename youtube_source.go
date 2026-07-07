@@ -148,7 +148,9 @@ func (myInstabot MyInstabot) ytSourceLoop() {
 		log.Printf("YTSource: @%s score=%d title=%q",
 			meta.Author, score, truncateStr(meta.Title, 80))
 
-		if score < 5 {
+		// In pure YT-to-YT mode (no Instagram target), bypass the tech filter entirely
+		isPureYtToYt := youtubeMode && !techMode
+		if !isPureYtToYt && score < 5 {
 			log.Printf("YTSource: Skipping %s — score too low (%d)", videoID, score)
 			nextShort(ctx)
 			time.Sleep(4*time.Second)
