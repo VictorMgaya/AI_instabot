@@ -189,8 +189,7 @@ func (myInstabot MyInstabot) techExploreLoop() {
 
 		myInstabot.techBrowseExplore(maxReposts)
 
-		log.Printf("TechRepost: Cycle done — %d reposts. Next cycle in 15-30min...", techRepostCount)
-		randDelay(900, 1800)
+		log.Printf("TechRepost: Cycle done — %d reposts. Starting next scan...", techRepostCount)
 	}
 }
 
