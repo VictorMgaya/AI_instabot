@@ -234,33 +234,23 @@ def main():
             # Try multiple methods to close the upload dialog
             for attempt in range(6):
                 # Method 1: Dispatch native click on done-button
-                closed = page.evaluate("""
-                    var btn = document.querySelector('#done-button');
-                    if (btn) {
-                        btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                    }
-                    var dialog = document.querySelector('ytcp-uploads-dialog');
-                    return !dialog;
-                """)
+                page.evaluate("(function(){var b=document.querySelector('#done-button');if(b)b.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))})()")
+                page.wait_for_timeout(1000)
+                closed = page.evaluate("document.querySelector('ytcp-uploads-dialog') === null")
                 if closed:
                     break
                 
                 # Method 2: Click dialog close button (X)
-                closed = page.evaluate("""
-                    var closeBtn = document.querySelector('ytcp-uploads-dialog iron-icon#close-button') ||
-                                   document.querySelector('ytcp-uploads-dialog [aria-label="Close"]') ||
-                                   document.querySelector('ytcp-uploads-dialog #close-button');
-                    if (closeBtn) { closeBtn.click(); }
-                    var dialog = document.querySelector('ytcp-uploads-dialog');
-                    return !dialog;
-                """)
+                page.evaluate("(document.querySelector('ytcp-uploads-dialog iron-icon#close-button') || document.querySelector('ytcp-uploads-dialog [aria-label=\"Close\"]') || document.querySelector('ytcp-uploads-dialog #close-button'))?.click()")
+                page.wait_for_timeout(1000)
+                closed = page.evaluate("document.querySelector('ytcp-uploads-dialog') === null")
                 if closed:
                     break
                 
                 # Method 3: Press Escape
                 page.keyboard.press("Escape")
-                page.wait_for_timeout(1000)
-                closed = page.evaluate("return document.querySelector('ytcp-uploads-dialog') === null")
+                page.wait_for_timeout(1500)
+                closed = page.evaluate("document.querySelector('ytcp-uploads-dialog') === null")
                 if closed:
                     break
                 
