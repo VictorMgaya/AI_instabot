@@ -211,6 +211,9 @@ func (myInstabot MyInstabot) techBrowseExplore() {
 		return nil
 	}); err != nil {
 		logPrefix(PrefixTech, "Explore fetch error: %v", err)
+		if strings.Contains(err.Error(), "feedback_required") {
+			tryCookieFallback()
+		}
 		return
 	}
 

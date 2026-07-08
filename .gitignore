@@ -53,4 +53,5 @@ Thumbs.db
 # Sessions & downloads
 youtube-session.json
 config/youtube-cookies.txt
+config/instagram-cookies.txt
 downloads/

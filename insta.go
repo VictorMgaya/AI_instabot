@@ -21,12 +21,35 @@ var checkedUser = make(map[string]bool)
 
 var insta *goinsta.Instagram
 
-// login will try to reload a previous session, and will create a new one if it can't
+// login will try to reload a previous session, then fall back to cookie-based
+// Playwright auth if available, and finally fall back to username/password.
 func login() {
-	err := reloadSession()
-	if err != nil {
-		createAndSaveSession()
+	if err := reloadSession(); err == nil {
+		// Session loaded — verify it's not rate-limited before proceeding
+		if !isSessionRateLimited() {
+			return
+		}
+		logPrefix(PrefixInsta, "Session is rate-limited — refreshing via cookie auth...")
+	} else {
+		logPrefix(PrefixInsta, "Session restore failed — trying cookie auth fallback...")
 	}
+
+	if err := loginViaPlaywrightFallback(); err == nil {
+		return
+	}
+	logPrefix(PrefixInsta, "Cookie auth failed — trying username/password...")
+
+	createAndSaveSession()
+}
+
+// isSessionRateLimited tests the loaded session with a lightweight API call.
+// Returns true if the session returns feedback_required.
+func isSessionRateLimited() bool {
+	_, err := instabot.Insta.Profiles.ByName("instagram")
+	if err != nil && strings.Contains(err.Error(), "feedback_required") {
+		return true
+	}
+	return false
 }
 
 // reloadSession will attempt to recover a previous session
@@ -235,6 +258,9 @@ func (myInstabot MyInstabot) browseExplore() {
 		return nil
 	}); err != nil {
 		logPrefix(PrefixExplore, "Fetch error: %v", err)
+		if strings.Contains(err.Error(), "feedback_required") {
+			tryCookieFallback()
+		}
 		return
 	}
 
